@@ -1,0 +1,21 @@
+{
+  "name": "tminus-monorepo",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "bun run scripts/build.ts",
+    "test": "bun test",
+    "eval": "bun packages/cli/src/index.ts eval",
+    "bench": "bun test tests/render.bench.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "tminus": "bun packages/cli/src/index.ts",
+    "menubar": "cd apps/menubar && swift build -c release"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.3",
+    "typescript": "^7.0.2"
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "name": "tminus",
+  "version": "0.1.0",
+  "description": "Live ETA for AI coding agents (Claude Code, Codex) in your terminal status line",
+  "license": "MIT",
+  "author": "Shubhransh Bhaskar",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iamshubhransh/tminus.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/iamshubhransh/tminus#readme",
+  "bugs": {
+    "url": "https://github.com/iamshubhransh/tminus/issues"
+  },
+  "type": "module",
+  "bin": {
+    "tminus": "./bin/tminus.js"
+  },
+  "files": [
+    "bin",
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^11.0.0"
+  },
+  "keywords": [
+    "claude-code",
+    "codex",
+    "statusline",
+    "eta",
+    "cli",
+    "ai-agents"
+  ]
+}
