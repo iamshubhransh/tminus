@@ -18,16 +18,19 @@ tminus predicts how long Claude Code (or Codex CLI) will take to finish your pro
 ## Install
 
 ```sh
-npm install -g @iamshubhransh/tminus && tminus init
+npm install -g @iamshubhransh/tminus && tminus init --yes
 ```
 
-`init` finds your agents and imports your history. It then shows every config change it will make and asks once; press Enter to apply. Your existing status line is kept and the estimate is appended to it. Open Claude Code sessions pick up the change straight away and show `ETA · idle` until you send a prompt.
+That's the whole setup. It works in a terminal, from `!` inside Claude Code, or when you ask an AI agent to install it. `init` finds Claude Code and Codex, imports your history so estimates start from your own turns, and then:
 
-Asking an AI agent to install it, or running it from a script? Use `tminus init --yes`: there's no terminal there to answer the question. `tminus uninstall` puts your config back byte for byte.
+- **Claude Code** (`~/.claude/settings.json`): keeps your status line and adds the ETA after it, and adds background hooks that record timing and never block Claude Code.
+- **Codex** (`~/.codex/hooks.json`): adds two background hooks; trust them once with `/hooks` inside Codex.
 
-Bun users: `bun add -g @iamshubhransh/tminus && tminus init`. To try it without a global install: `npx @iamshubhransh/tminus init` (later commands are then `npx @iamshubhransh/tminus …`).
+Open Claude Code sessions pick up the change straight away and show `ETA · idle` until you send a prompt. Backups are kept, and `tminus uninstall` restores both files byte for byte. To review first, run `tminus init` without `--yes` in a terminal: it summarises the changes and asks once (`--diff` shows the exact diff, `--dry-run` changes nothing).
 
-Bun is recommended: the status line renders in about 18ms under Bun (about 27ms under Node). Node 20+ works too.
+Bun users: `bun add -g @iamshubhransh/tminus && tminus init --yes`. To try it without a global install: `npx @iamshubhransh/tminus init --yes` (later commands are then `npx @iamshubhransh/tminus …`).
+
+Bun is recommended: the status line renders in about 18ms under Bun (about 27ms under Node). Node 22.13+ works too.
 
 ## What you'll see
 

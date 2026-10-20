@@ -10,6 +10,8 @@ export interface ConfigChange {
 export interface InstallResult {
   changes: ConfigChange[];
   notes: string[];
+  /** What the change does, in a line or two each, for people who don't want to read a JSON diff. */
+  summary?: string[];
 }
 
 export interface InstallOptions {

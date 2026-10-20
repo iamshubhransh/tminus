@@ -7,8 +7,8 @@ const VERSION: string = pkg.version;
 const HELP = `tminus ${VERSION} — live ETA for AI coding agents
 
 Usage:
-  tminus init [--yes] [--no-backfill] [--refresh <sec>] [--agents claude-code,codex]
-                             detect agents, import history, install hooks + statusline (shows a diff first)
+  tminus init [--yes] [--diff] [--dry-run] [--no-backfill] [--refresh <sec>] [--agents claude-code,codex]
+                             detect agents, import history, install hooks + statusline (says what changes, asks once)
   tminus backfill [--since <date>] [--agent <id>] [--rebuild]
                              re-import transcripts (idempotent; --rebuild re-derives backfilled turns)
   tminus status [--session <id>] [--json]

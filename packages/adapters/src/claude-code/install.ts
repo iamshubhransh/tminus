@@ -109,7 +109,11 @@ export async function installClaude(opts: InstallOptions): Promise<InstallResult
   const notes: string[] = [];
   if (plan.wrapped) notes.push(`Existing statusline kept and wrapped: ${plan.wrapped.command}`);
   const changes: ConfigChange[] = plan.before === plan.after ? [] : [{ file: plan.file, before: plan.before, after: plan.after }];
-  if (opts.dryRun || !changes.length) return { changes, notes };
+  const summary = [
+    plan.wrapped ? `status line: keeps \`${plan.wrapped.command}\` and adds the ETA after it` : 'status line: shows the ETA',
+    `${plan.events.length} background hooks (${plan.events.slice(0, 3).join(', ')}, …) that record timing and never block Claude Code`,
+  ];
+  if (opts.dryRun || !changes.length) return { changes, notes, summary };
 
   const manifest = readInstallManifest();
   const prev = manifest['claude-code'];
@@ -127,7 +131,7 @@ export async function installClaude(opts: InstallOptions): Promise<InstallResult
   };
   writeInstallManifest(manifest);
   if (backup) notes.push(`Backup: ${backup}`);
-  return { changes, notes };
+  return { changes, notes, summary };
 }
 
 export function planClaudeUninstall(): { file: string; before: string | null; after: string | null; exact: boolean } | null {

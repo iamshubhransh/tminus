@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // npm entry point. Prefer Bun (faster startup keeps the statusline under 30ms);
-// fall back to the Node 20+ bundle when Bun isn't installed.
+// fall back to the Node 22.13+ bundle when Bun isn't installed.
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';

@@ -1,6 +1,6 @@
 {
   "name": "@iamshubhransh/tminus",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Live ETA for AI coding agents (Claude Code, Codex) in your terminal status line",
   "license": "MIT",
   "author": "Shubhransh Bhaskar",
@@ -25,10 +25,7 @@
     "access": "public"
   },
   "engines": {
-    "node": ">=20"
-  },
-  "optionalDependencies": {
-    "better-sqlite3": "^11.0.0"
+    "node": ">=22.13"
   },
   "keywords": [
     "claude-code",

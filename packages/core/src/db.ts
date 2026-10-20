@@ -13,7 +13,7 @@ export interface Stmt {
   all(...params: unknown[]): any[];
 }
 export interface DB {
-  driver: 'bun:sqlite' | 'node:sqlite' | 'better-sqlite3';
+  driver: 'bun:sqlite' | 'node:sqlite';
   exec(sql: string): void;
   prepare(sql: string): Stmt;
   transaction<T>(fn: () => T): T;
@@ -27,13 +27,13 @@ function openRaw(file: string): { raw: Raw; driver: DB['driver'] } {
     const { Database } = require('bun:sqlite');
     return { raw: new Database(file, { create: true }), driver: 'bun:sqlite' };
   }
+  let DatabaseSync: any;
   try {
-    const { DatabaseSync } = require('node:sqlite');
-    return { raw: new DatabaseSync(file), driver: 'node:sqlite' };
+    ({ DatabaseSync } = require('node:sqlite'));
   } catch {
-    const BetterSqlite = require('better-sqlite3');
-    return { raw: new BetterSqlite(file), driver: 'better-sqlite3' };
+    throw new Error(`tminus needs Bun (https://bun.sh) or Node 22.13+ for its built-in SQLite; this is Node ${process.versions.node}.`);
   }
+  return { raw: new DatabaseSync(file), driver: 'node:sqlite' };
 }
 
 /** Normalise params: drivers disagree on undefined and booleans. */

@@ -1,10 +1,16 @@
 import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { ADAPTERS, type AgentAdapter, type ConfigChange } from '@tminus/adapters';
 import { loadConfig, openDb, paths, readInstallManifest, saveConfig, stopCollector, type Config, type NormalizedTurn } from '@tminus/core';
 import { flagBool, flagStr, type Args } from '../args.ts';
 import { installSelf } from '../self.ts';
 import { c, confirm, diffLines } from '../ui.ts';
 import { runBackfill } from './data.ts';
+
+function tilde(file: string): string {
+  const home = homedir();
+  return file.startsWith(home + '/') ? '~' + file.slice(home.length) : file;
+}
 
 function showChanges(changes: ConfigChange[]): void {
   for (const ch of changes) {
@@ -26,6 +32,7 @@ async function selectAdapters(a: Args): Promise<AgentAdapter[]> {
 export async function cmdInit(a: Args): Promise<number> {
   const yes = flagBool(a, 'yes', 'y');
   const dry = flagBool(a, 'dry-run');
+  const full = dry || flagBool(a, 'diff');
   console.log(c.bold('tminus init'));
   const adapters = await selectAdapters(a);
   if (!adapters.length) {
@@ -56,10 +63,19 @@ export async function cmdInit(a: Args): Promise<number> {
       console.log(`\n${ad.displayName}: already set up ${c.green('✓')}`);
       continue;
     }
-    console.log(`\n${c.bold(ad.displayName)}: the following config changes will be made (a backup is kept):`);
-    showChanges(plan.changes);
-    for (const n of plan.notes) console.log(c.dim(`  · ${n}`));
+    if (full || !plan.summary) {
+      console.log(`\n${c.bold(ad.displayName)}: the following config changes will be made (a backup is kept):`);
+      showChanges(plan.changes);
+      for (const n of plan.notes) console.log(c.dim(`  · ${n}`));
+    } else {
+      const files = plan.changes.map((ch) => tilde(ch.file) + (ch.before == null ? ' (new file)' : '')).join(', ');
+      console.log(`\n${c.bold(ad.displayName)} ${c.dim(files)}`);
+      for (const s of plan.summary) console.log(`  · ${s}`);
+    }
     pending.push({ ad, notes: plan.notes });
+  }
+  if (pending.length && !full) {
+    console.log(c.dim('\nBackups are kept, and `tminus uninstall` restores these files byte for byte. Exact diff: `tminus init --diff`.'));
   }
   if (dry || !pending.length) {
     if (!pending.length) printReady(adapters, []);
@@ -75,7 +91,7 @@ export async function cmdInit(a: Args): Promise<number> {
   }
   for (const { ad, notes } of pending) {
     const res = await ad.install(opts);
-    for (const n of res.notes) if (!notes.includes(n)) console.log(c.dim(`  · ${n}`));
+    if (full) for (const n of res.notes) if (!notes.includes(n)) console.log(c.dim(`  · ${n}`));
   }
   printReady(adapters, pending.map((p) => p.ad.id));
   return 0;

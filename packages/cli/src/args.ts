@@ -4,7 +4,7 @@ export interface Args {
   flags: Record<string, string | boolean>;
 }
 
-const BOOLEAN = new Set(['yes', 'y', 'json', 'tmux', 'statusline', 'wrap', 'purge', 'no-color', 'color', 'no-backfill', 'foreground', 'help', 'h', 'dry-run', 'quiet', 'all', 'rebuild', 'version', 'v']);
+const BOOLEAN = new Set(['yes', 'y', 'json', 'tmux', 'statusline', 'wrap', 'purge', 'no-color', 'color', 'no-backfill', 'foreground', 'help', 'h', 'dry-run', 'quiet', 'all', 'rebuild', 'version', 'v', 'diff']);
 
 export function parseArgs(argv: string[]): Args {
   const out: Args = { _: [], flags: {} };

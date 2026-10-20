@@ -43,7 +43,8 @@ export async function installCodex(opts: InstallOptions): Promise<InstallResult>
   const plan = planCodexInstall(opts);
   const changes: ConfigChange[] = plan.before === plan.after ? [] : [{ file: plan.file, before: plan.before, after: plan.after }];
   const notes = [CODEX_TRUST_NOTE];
-  if (opts.dryRun || !changes.length) return { changes, notes };
+  const summary = [`${EVENTS.length} background hooks (${EVENTS.join(', ')}) that wake the tminus collector; trust them once with /hooks inside Codex`];
+  if (opts.dryRun || !changes.length) return { changes, notes, summary };
   const manifest = readInstallManifest();
   const prev = manifest.codex;
   const backup = backupFile(plan.file, 'codex-hooks');
@@ -54,7 +55,7 @@ export async function installCodex(opts: InstallOptions): Promise<InstallResult>
     original: prev ? prev.original : plan.before, backup: prev?.backup ?? backup, detail: { events: EVENTS },
   };
   writeInstallManifest(manifest);
-  return { changes, notes };
+  return { changes, notes, summary };
 }
 
 export async function uninstallCodex(opts: { dryRun?: boolean } = {}): Promise<InstallResult> {

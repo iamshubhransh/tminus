@@ -15,7 +15,6 @@ mkdirSync(out, { recursive: true });
 
 const cli = join(root, 'packages/cli/src/index.ts');
 const render = join(root, 'packages/render/src/bin.ts');
-const external = ['better-sqlite3'];
 
 const outputs = [
   [cli, 'bun', 'tminus.js'],
@@ -25,7 +24,7 @@ const outputs = [
 ] as const;
 
 for (const [entry, target, file] of outputs) {
-  const res = await Bun.build({ entrypoints: [entry], target, format: 'esm', external, minify: { syntax: true, whitespace: false, identifiers: false } });
+  const res = await Bun.build({ entrypoints: [entry], target, format: 'esm', minify: { syntax: true, whitespace: false, identifiers: false } });
   if (!res.success) {
     console.error(res.logs.join('\n'));
     process.exit(1);

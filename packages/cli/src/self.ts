@@ -49,7 +49,7 @@ export async function installSelf(): Promise<InstalledSelf> {
     // Running from source: bundle on the fly.
     const B = (globalThis as any).Bun;
     const build = async (entry: string, out: string) => {
-      const res = await B.build({ entrypoints: [entry], target: 'bun', format: 'esm', minify: false, external: ['better-sqlite3'] });
+      const res = await B.build({ entrypoints: [entry], target: 'bun', format: 'esm', minify: false });
       if (!res.success) throw new Error('bundle failed: ' + res.logs.map(String).join('\n'));
       await B.write(out, await res.outputs[0].text());
     };

@@ -102,6 +102,15 @@ describe('Claude Code install/uninstall round trip', () => {
     expect(existsSync(claudeSettingsPath())).toBe(false);
   });
 
+  test('the plan summarises the change in plain words', async () => {
+    writeFileSync(claudeSettingsPath(), ORIGINALS['existing statusline + hooks, 2-space']!);
+    const plan = await claudeCode.install({ tminusCommand: CMD, dryRun: true });
+    expect(plan.summary?.[0]).toBe('status line: keeps `ccstatusline` and adds the ETA after it');
+    expect(plan.summary?.[1]).toMatch(/^\d+ background hooks \(SessionStart, UserPromptSubmit, PreToolUse, …\)/);
+    const codexPlan = await codex.install({ tminusCommand: CMD, dryRun: true });
+    expect(codexPlan.summary?.[0]).toContain('/hooks');
+  });
+
   test('refuses to touch invalid JSON', async () => {
     writeFileSync(claudeSettingsPath(), '{ not json');
     await expect(claudeCode.install({ tminusCommand: CMD })).rejects.toThrow(/not valid JSON/);
