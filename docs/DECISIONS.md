@@ -2,7 +2,7 @@
 
 Choices made while building tminus, with the reason for each. Newest last.
 
-1. **Package name `tminus`.** It was free on npm on 2026-10-20 (`npm view tminus` → 404), so `@tminus/cli` was not needed. Internal workspaces are `@tminus/core`, `@tminus/adapters`, `@tminus/render` (private).
+1. **Package name `@iamshubhransh/tminus`, command `tminus`.** `tminus` was unclaimed on npm on 2026-10-20, but the registry refused it on publish as too similar to the existing `t-minus`, so the package is scoped to the author. The binary is still `tminus`. Internal workspaces are `@tminus/core`, `@tminus/adapters`, `@tminus/render` (private).
 
 2. **SQLite driver: `bun:sqlite` → `node:sqlite` → `better-sqlite3`.** Node 22.5+ ships `node:sqlite`, so Node users usually need no native module. `better-sqlite3` stays an optional dependency for Node 20. Its ExperimentalWarning is filtered so it can't leak into hooks or the statusline.
 

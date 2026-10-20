@@ -1,5 +1,5 @@
 {
-  "name": "tminus",
+  "name": "@iamshubhransh/tminus",
   "version": "0.1.0",
   "description": "Live ETA for AI coding agents (Claude Code, Codex) in your terminal status line",
   "license": "MIT",
@@ -21,6 +21,9 @@
     "bin",
     "dist"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=20"
   },

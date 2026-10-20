@@ -17,7 +17,7 @@
       },
     },
     "packages/cli": {
-      "name": "tminus",
+      "name": "@iamshubhransh/tminus",
       "version": "0.1.0",
       "bin": {
         "tminus": "./bin/tminus.js",
@@ -39,6 +39,8 @@
     },
   },
   "packages": {
+    "@iamshubhransh/tminus": ["@iamshubhransh/tminus@workspace:packages/cli"],
+
     "@tminus/adapters": ["@tminus/adapters@workspace:packages/adapters"],
 
     "@tminus/core": ["@tminus/core@workspace:packages/core"],
@@ -160,8 +162,6 @@
     "tar-fs": ["tar-fs@2.1.5", "", { "dependencies": { "chownr": "^1.1.1", "mkdirp-classic": "^0.5.2", "pump": "^3.0.0", "tar-stream": "^2.1.4" } }, "sha512-OboTd8mmMhZDNPV+UjQcK9yKAatXu2aJ+r1w4im1Otd4M4fl2hwvdoXUxIYHFTHWK/3y3FarBP70v3vwmGlOxw=="],
 
     "tar-stream": ["tar-stream@2.2.0", "", { "dependencies": { "bl": "^4.0.3", "end-of-stream": "^1.4.1", "fs-constants": "^1.0.0", "inherits": "^2.0.3", "readable-stream": "^3.1.1" } }, "sha512-ujeqbceABgwMZxEJnk2HDY2DlnUZ+9oEcb1KzTVfYHio0UE6dG71n60d8D2I4qNvleWrrXpmjpt7vZeF1LnMZQ=="],
-
-    "tminus": ["tminus@workspace:packages/cli"],
 
     "tunnel-agent": ["tunnel-agent@0.6.0", "", { "dependencies": { "safe-buffer": "^5.0.1" } }, "sha512-McnNiV1l8RYeY8tBgEpuodCC1mLUdbSN+CYBL7kJsJNInOP8UjDDEwdk6Mw60vdLLrr5NHKZhMAOSrR2NZuQ+w=="],
 

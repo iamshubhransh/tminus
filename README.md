@@ -1,7 +1,7 @@
 # tminus
 
 [![CI](https://github.com/iamshubhransh/tminus/actions/workflows/ci.yml/badge.svg)](https://github.com/iamshubhransh/tminus/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/tminus)](https://www.npmjs.com/package/tminus)
+[![npm](https://img.shields.io/npm/v/@iamshubhransh/tminus)](https://www.npmjs.com/package/@iamshubhransh/tminus)
 [![license](https://img.shields.io/npm/l/tminus)](LICENSE)
 
 **A live ETA for AI coding agents, in your terminal status line.**
@@ -18,8 +18,11 @@ tminus predicts how long Claude Code (or Codex CLI) will take to finish your pro
 ## Install
 
 ```sh
-npx tminus init        # or: bunx tminus init
+npm install -g @iamshubhransh/tminus   # or: bun add -g @iamshubhransh/tminus
+tminus init
 ```
+
+To try it without installing: `npx @iamshubhransh/tminus init`. The command is `tminus` either way.
 
 `init` finds your agents, imports your history, then shows a diff of every config change and asks before applying it (`--yes` skips the prompt). Your existing status line is kept and the estimate is appended to it. `tminus uninstall` puts your config back byte for byte.
 

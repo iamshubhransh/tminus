@@ -13,7 +13,7 @@ NODE_BIN="$(command -v node)"
 BUN_BIN="$(command -v bun)"
 
 (cd "$WORK" && npm pack "$ROOT/packages/cli" --silent >/dev/null)
-TARBALL="$(ls "$WORK"/tminus-*.tgz)"
+TARBALL="$(ls "$WORK"/*tminus-*.tgz)"
 
 run_case() {
   local name="$1" path="$2"
