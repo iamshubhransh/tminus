@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test';
+
+// Model training is CPU-bound; shared CI runners are several times slower than a laptop.
+const SLOW = 60_000;
 import {
   buildFeatures, evaluate, importTurns, isGbdtModel, liveQuality, metrics, openDb, predictGbdt, scoredTurns, trainGbdt,
   type NormalizedTurn,
@@ -44,7 +47,7 @@ describe('backfill import + evaluation', () => {
     expect(m.underP90).toBeLessThan(0.97);
     expect(m.inRange).toBeGreaterThan(0.7);
     expect(Math.exp(m.mdae)).toBeLessThan(2);
-  });
+  }, SLOW);
 
   test('live replay: error shrinks once the turn is under way', () => {
     const db = openDb(':memory:');
@@ -53,12 +56,12 @@ describe('backfill import + evaluation', () => {
     expect(q.n).toBeGreaterThan(200);
     expect(q.mdae[1]).toBeLessThan(q.mdae[0]);
     expect(q.runningP90).toBeGreaterThan(0.8);
-  });
+  }, SLOW);
 
   test('rolling-origin v1 vs v2: every test turn is predicted by models trained only on earlier turns', () => {
     const db = openDb(':memory:');
     importTurns(db, synthTurns(260));
-    const r = evaluate(db, { rounds: 40, folds: 4, minTrain: 100 });
+    const r = evaluate(db, { rounds: 20, folds: 4, minTrain: 100 });
     expect(r.folds.length).toBe(4);
     expect(r.folds[0].trainN).toBe(100);
     for (let i = 1; i < r.folds.length; i++) {
@@ -71,7 +74,7 @@ describe('backfill import + evaluation', () => {
     expect(r.live!.v1.snapshots).toBeGreaterThan(0);
     expect(r.reasons.length).toBe(5);
     expect(typeof r.v2Wins).toBe('boolean');
-  });
+  }, SLOW);
 
   test('too little history: no evaluation, v2 not promoted', () => {
     const db = openDb(':memory:');
@@ -84,7 +87,7 @@ describe('backfill import + evaluation', () => {
 
 describe('v2: median GBDT + out-of-fold residuals', () => {
   const data = synthTurns(300);
-  const m = trainGbdt(data.map((t) => t.features), data.map((t) => t.finishedAt - t.submittedAt), { rounds: 60 });
+  const m = trainGbdt(data.map((t) => t.features), data.map((t) => t.finishedAt - t.submittedAt), { rounds: 40 });
 
   test('separates intents; quantiles are ordered; the model round-trips through JSON', () => {
     const fix = predictGbdt(m, buildFeatures('fix the bug', 0, 'human', { model: 'm1', effort: 'high' }));

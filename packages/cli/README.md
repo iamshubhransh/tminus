@@ -1,5 +1,9 @@
 # tminus
 
+[![CI](https://github.com/iamshubhransh/tminus/actions/workflows/ci.yml/badge.svg)](https://github.com/iamshubhransh/tminus/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/tminus)](https://www.npmjs.com/package/tminus)
+[![license](https://img.shields.io/npm/l/tminus)](LICENSE)
+
 **A live ETA for AI coding agents, in your terminal status line.**
 
 ```

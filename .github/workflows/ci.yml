@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: bun install --frozen-lockfile
+      - name: Typecheck
+        run: bunx tsc --noEmit -p tsconfig.json
+      - name: Build
+        run: bun run build
+      - name: Test
+        run: bun test
+      - name: Smoke test the npm package as a new user (Bun and Node-only)
+        run: scripts/smoke-pack.sh
+
+  menubar:
+    name: menubar app (macOS)
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: apps/menubar
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift --version
+      - name: Build
+        run: swift build -c release
+      - name: Test
+        run: swift test
