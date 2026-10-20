@@ -50,7 +50,7 @@ remaining P50 = the median of (T − t | T > t)
 remaining P90 = the 90th percentile of (T − t | T > t)
 ```
 
-Agent durations have a heavy tail (most turns are short, some run very long). So a turn that keeps running pushes this estimate **up**, not down. tminus never shows a frozen "1 min left" for a turn that is clearly running long. Once elapsed time passes the original P90, the display switches to `⏳ running long · 9m`.
+Agent durations have a heavy tail (most turns are short, some run very long). So a turn that keeps running pushes this estimate **up**, not down. tminus never shows a frozen "1 min left" for a turn that is clearly running long. Once elapsed time passes the original P90, the display switches to `⏳ ETA running long · 9m so far`.
 
 ### b. Todo progress
 

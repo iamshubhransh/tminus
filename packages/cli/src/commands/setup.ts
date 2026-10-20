@@ -46,9 +46,12 @@ export async function cmdInit(a: Args): Promise<number> {
 
   const refreshFlag = flagStr(a, 'refresh');
   const refreshInterval = refreshFlag === undefined ? undefined : refreshFlag === '0' ? null : Number(refreshFlag);
-  let applied = 0;
+  const opts = { tminusCommand: self.command, renderCommand: self.renderCommand, refreshInterval };
+
+  // Show every change first, then ask once.
+  const pending: { ad: AgentAdapter; notes: string[] }[] = [];
   for (const ad of adapters) {
-    const plan = await ad.install({ tminusCommand: self.command, renderCommand: self.renderCommand, dryRun: true, refreshInterval });
+    const plan = await ad.install({ ...opts, dryRun: true });
     if (!plan.changes.length) {
       console.log(`\n${ad.displayName}: already set up ${c.green('✓')}`);
       continue;
@@ -56,24 +59,37 @@ export async function cmdInit(a: Args): Promise<number> {
     console.log(`\n${c.bold(ad.displayName)}: the following config changes will be made (a backup is kept):`);
     showChanges(plan.changes);
     for (const n of plan.notes) console.log(c.dim(`  · ${n}`));
-    if (dry) continue;
-    if (!yes && !(await confirm(`Apply changes for ${ad.displayName}?`))) {
-      console.log(c.yellow(`Skipped ${ad.displayName}.`) + (process.stdin.isTTY ? '' : ' (no TTY: re-run with --yes)'));
-      continue;
-    }
-    const res = await ad.install({ tminusCommand: self.command, renderCommand: self.renderCommand, refreshInterval });
-    for (const n of res.notes) if (!plan.notes.includes(n)) console.log(c.dim(`  · ${n}`));
-    applied++;
+    pending.push({ ad, notes: plan.notes });
+  }
+  if (dry || !pending.length) {
+    if (!pending.length) printReady(adapters, []);
+    return 0;
   }
 
-  console.log(c.bold('\nDone.'));
-  if (applied) {
-    console.log('The estimate appears in the Claude Code status line on your next prompt.');
-    console.log(c.dim('Claude Code redraws the status line on agent events (and every refreshInterval seconds if set).'));
-    console.log(c.dim('For a smooth countdown: `tminus render --tmux` in tmux status-right, or the menubar app (apps/menubar).'));
+  const names = pending.map((p) => p.ad.displayName).join(' and ');
+  if (!yes && !(await confirm(`\nApply these changes to ${names}?`, true))) {
+    console.log(process.stdin.isTTY
+      ? c.yellow('\nNothing was changed.')
+      : c.yellow('\nNothing was changed: there is no terminal here to confirm in.') + `\nTo apply the changes above, run: ${c.bold('tminus init --yes')}`);
+    return 0;
   }
-  console.log(c.dim('Check calibration any time with `tminus stats`; health with `tminus doctor`.'));
+  for (const { ad, notes } of pending) {
+    const res = await ad.install(opts);
+    for (const n of res.notes) if (!notes.includes(n)) console.log(c.dim(`  · ${n}`));
+  }
+  printReady(adapters, pending.map((p) => p.ad.id));
   return 0;
+}
+
+function printReady(adapters: AgentAdapter[], changed: string[]): void {
+  console.log(c.bold(`\n${c.green('✓')} tminus is set up.`));
+  if (adapters.some((ad) => ad.id === 'claude-code')) {
+    console.log(`\nClaude Code: your status line now shows ${c.dim('ETA · idle')}. Open sessions pick it up automatically.`);
+    console.log(`Send a prompt and it switches to a live estimate: ${c.cyan(c.bold('⏳ ETA ~2m (1–5m) · 3/7'))}`);
+    console.log(c.dim('  (typical time left · likely range · todo progress)'));
+  }
+  if (changed.includes('codex')) console.log(`\nCodex: open Codex and run ${c.bold('/hooks')} to trust the two tminus entries.`);
+  console.log(c.dim('\nHow accurate it has been: `tminus stats` · health check: `tminus doctor` · undo: `tminus uninstall`'));
 }
 
 export async function cmdUninstall(a: Args): Promise<number> {

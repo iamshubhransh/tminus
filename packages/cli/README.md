@@ -2,12 +2,12 @@
 
 [![CI](https://github.com/iamshubhransh/tminus/actions/workflows/ci.yml/badge.svg)](https://github.com/iamshubhransh/tminus/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@iamshubhransh/tminus)](https://www.npmjs.com/package/@iamshubhransh/tminus)
-[![license](https://img.shields.io/npm/l/tminus)](LICENSE)
+[![license](https://img.shields.io/npm/l/@iamshubhransh/tminus)](LICENSE)
 
 **A live ETA for AI coding agents, in your terminal status line.**
 
 ```
-user@repo main ✓ │ ⏳ ~2m · 1–5m · 3/7
+user@repo main ✓ │ ⏳ ETA ~2m (1–5m) · 3/7
 ```
 
 tminus predicts how long Claude Code (or Codex CLI) will take to finish your prompt. It shows a range the moment you hit enter and tightens it while the agent works. It learns from your own history, imported from the transcripts already on your machine, so it is useful on day one.
@@ -18,13 +18,14 @@ tminus predicts how long Claude Code (or Codex CLI) will take to finish your pro
 ## Install
 
 ```sh
-npm install -g @iamshubhransh/tminus   # or: bun add -g @iamshubhransh/tminus
-tminus init
+npm install -g @iamshubhransh/tminus && tminus init
 ```
 
-To try it without installing: `npx @iamshubhransh/tminus init`. The command is `tminus` either way.
+`init` finds your agents and imports your history. It then shows every config change it will make and asks once; press Enter to apply. Your existing status line is kept and the estimate is appended to it. Open Claude Code sessions pick up the change straight away and show `ETA · idle` until you send a prompt.
 
-`init` finds your agents, imports your history, then shows a diff of every config change and asks before applying it (`--yes` skips the prompt). Your existing status line is kept and the estimate is appended to it. `tminus uninstall` puts your config back byte for byte.
+Asking an AI agent to install it, or running it from a script? Use `tminus init --yes`: there's no terminal there to answer the question. `tminus uninstall` puts your config back byte for byte.
+
+Bun users: `bun add -g @iamshubhransh/tminus && tminus init`. To try it without a global install: `npx @iamshubhransh/tminus init` (later commands are then `npx @iamshubhransh/tminus …`).
 
 Bun is recommended: the status line renders in about 18ms under Bun (about 27ms under Node). Node 20+ works too.
 
@@ -32,10 +33,11 @@ Bun is recommended: the status line renders in about 18ms under Bun (about 27ms 
 
 | state | status line |
 |---|---|
-| running | `⏳ ~2m · 1–5m · 3/7` (median remaining · P10–P90 range · todo progress) |
-| waiting on you | `⏸ waiting on you` |
-| past its P90 | `⏳ running long · 9m` |
-| just finished | `✓ 4m12s · predicted 3m` (for 10 seconds) |
+| no prompt running | `ETA · idle` (gray) |
+| running | `⏳ ETA ~2m (1–5m) · 3/7` (typical time left · P10–P90 range · todo progress), bold and colored |
+| waiting on you | `⏸ ETA paused · waiting on you` (the clock stops while you answer) |
+| past its P90 | `⏳ ETA running long · 9m so far` |
+| just finished | `✓ done in 4m12s · predicted 3m` (for 10 seconds, then idle again) |
 
 Claude Code redraws its status line on agent events. When tminus owns the status line, it sets `refreshInterval: 1` so it ticks every second. When it wraps your existing one, it keeps your refresh setting. For a smooth countdown anywhere:
 
@@ -101,10 +103,11 @@ tminus uninstall [--purge]                              restore configs exactly
 
 | key | default | |
 |---|---|---|
-| `formats.running` | `{status} ~{p50} · {range} · {todo}` | tokens: `{status} {p50} {range} {todo} {elapsed}` |
-| `formats.waiting` | `⏸ waiting on you` | |
-| `formats.overrun` | `{status} running long · {elapsed}` | |
-| `formats.done` | `✓ {actual} · predicted {predicted}` | |
+| `formats.idle` | `ETA · idle` | set to `""` to hide tminus while nothing is running |
+| `formats.running` | `{status} ETA ~{p50} ({range}) · {todo}` | tokens: `{status} {p50} {range} {todo} {elapsed}` |
+| `formats.waiting` | `⏸ ETA paused · waiting on you` | |
+| `formats.overrun` | `{status} ETA running long · {elapsed} so far` | |
+| `formats.done` | `✓ done in {actual} · predicted {predicted}` | |
 | `color` | `true` | `NO_COLOR` always wins |
 | `doneLingerSec` | `10` | how long the result stays visible |
 | `wrapPosition` | `append-first` | `append-last`, `newline` |

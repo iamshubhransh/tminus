@@ -20,12 +20,18 @@ export function table(rows: string[][], align: ('l' | 'r')[] = []): string {
   }).join('  ').trimEnd()).join('\n');
 }
 
-export async function confirm(question: string): Promise<boolean> {
+/** Ask a yes/no question. Without a terminal there is no one to answer, so it is always "no". */
+export async function confirm(question: string, defaultYes = false): Promise<boolean> {
   if (!process.stdin.isTTY) return false;
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const answer: string = await new Promise((res) => rl.question(`${question} [y/N] `, res));
+  const answer = await new Promise<string | null>((res) => {
+    rl.on('close', () => res(null)); // Ctrl-D: no answer
+    rl.question(`${question} ${defaultYes ? '[Y/n]' : '[y/N]'} `, res);
+  });
   rl.close();
-  return /^y(es)?$/i.test(answer.trim());
+  if (answer === null) { process.stdout.write('\n'); return false; }
+  const a = answer.trim();
+  return a === '' ? defaultYes : /^y(es)?$/i.test(a);
 }
 
 /** Minimal line diff (LCS) for showing config changes before applying them. */

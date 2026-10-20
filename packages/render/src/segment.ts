@@ -1,19 +1,22 @@
 import { fmtPrecise, fmtRange, fmtShort, type Config, type LiveState } from '@tminus/core';
 
 export type Palette = 'ansi' | 'tmux' | 'none';
-type Tone = 'running' | 'waiting' | 'overrun' | 'done';
+type Tone = 'idle' | 'running' | 'waiting' | 'overrun' | 'done';
 
+// Active states are bold and colored; idle is a quiet gray so the segment lights up when a prompt starts.
 const ANSI: Record<Tone, string> = {
-  running: '\x1b[38;5;117m',
-  waiting: '\x1b[38;5;221m',
-  overrun: '\x1b[38;5;209m',
-  done: '\x1b[38;5;114m',
+  idle: '\x1b[38;5;244m',
+  running: '\x1b[1;38;5;117m',
+  waiting: '\x1b[1;38;5;221m',
+  overrun: '\x1b[1;38;5;209m',
+  done: '\x1b[1;38;5;114m',
 };
 const TMUX: Record<Tone, string> = {
-  running: '#[fg=colour117]',
-  waiting: '#[fg=colour221]',
-  overrun: '#[fg=colour209]',
-  done: '#[fg=colour114]',
+  idle: '#[fg=colour244]',
+  running: '#[fg=colour117,bold]',
+  waiting: '#[fg=colour221,bold]',
+  overrun: '#[fg=colour209,bold]',
+  done: '#[fg=colour114,bold]',
 };
 
 /** A state older than this means the collector is gone; don't pretend to count. */
@@ -42,12 +45,18 @@ export function fill(format: string, tokens: Record<string, string>): string {
 
 export interface SegmentResult { text: string; tone: Tone | null; stale: boolean }
 
+function idle(cfg: Config, palette: Palette): SegmentResult {
+  const text = fill(cfg.formats.idle ?? '', {});
+  return { text: paint(text, 'idle', palette), tone: text ? 'idle' : null, stale: false };
+}
+
 /**
- * Pure: state + clock -> segment text. Running:  ⏳ ~2m · 1–5m · 3/7
- * Waiting: ⏸ waiting on you. Overrun: ⏳ running long · 9m. Done: ✓ 4m12s · predicted 3m (for a few seconds).
+ * Pure: state + clock -> segment text. Idle: ETA · idle. Running: ⏳ ETA ~2m (1–5m) · 3/7.
+ * Waiting: ⏸ ETA paused · waiting on you. Overrun: ⏳ ETA running long · 9m so far.
+ * Done: ✓ done in 4m12s · predicted 3m (for a few seconds, then idle again).
  */
 export function renderSegment(state: LiveState | null, now: number, cfg: Config, palette: Palette, formatOverride?: string): SegmentResult {
-  if (!state) return { text: '', tone: null, stale: false };
+  if (!state) return idle(cfg, palette);
   const age = now - state.updatedAt;
   const t = state.turn;
 
@@ -72,7 +81,7 @@ export function renderSegment(state: LiveState | null, now: number, cfg: Config,
   }
 
   if (state.status === 'done' && state.last && state.last.outcome === 'completed') {
-    if (now - state.last.finishedAt > cfg.doneLingerSec * 1000) return { text: '', tone: null, stale: false };
+    if (now - state.last.finishedAt > cfg.doneLingerSec * 1000) return idle(cfg, palette);
     const tokens = {
       status: '✓',
       actual: fmtPrecise(state.last.actualMs),
@@ -82,5 +91,5 @@ export function renderSegment(state: LiveState | null, now: number, cfg: Config,
     };
     return { text: paint(fill(cfg.formats.done, tokens), 'done', palette), tone: 'done', stale: false };
   }
-  return { text: '', tone: null, stale: false };
+  return idle(cfg, palette);
 }

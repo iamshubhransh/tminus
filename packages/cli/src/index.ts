@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 import { parseArgs, flagBool, flagStr } from './args.ts';
+import pkg from '../package.json' with { type: 'json' };
 
-const VERSION = '0.1.0';
+const VERSION: string = pkg.version;
 
 const HELP = `tminus ${VERSION} — live ETA for AI coding agents
 

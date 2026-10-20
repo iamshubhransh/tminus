@@ -3,6 +3,8 @@ import { paths } from './paths.ts';
 import { writeJsonAtomic } from './state.ts';
 
 export interface Formats {
+  /** Nothing to estimate (no prompt running). An empty string hides the segment. */
+  idle: string;
   running: string;
   waiting: string;
   overrun: string;
@@ -28,10 +30,11 @@ export interface Config {
 }
 
 export const DEFAULT_FORMATS: Formats = {
-  running: '{status} ~{p50} · {range} · {todo}',
-  waiting: '⏸ waiting on you',
-  overrun: '{status} running long · {elapsed}',
-  done: '✓ {actual} · predicted {predicted}',
+  idle: 'ETA · idle',
+  running: '{status} ETA ~{p50} ({range}) · {todo}',
+  waiting: '⏸ ETA paused · waiting on you',
+  overrun: '{status} ETA running long · {elapsed} so far',
+  done: '✓ done in {actual} · predicted {predicted}',
 };
 
 export const DEFAULT_CONFIG: Config = {

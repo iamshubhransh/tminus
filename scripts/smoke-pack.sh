@@ -33,14 +33,18 @@ run_case() {
     echo "$DOC" | grep -q 'Claude Code: hooks: SessionStart' || { echo "hooks not recognised"; echo "$DOC"; exit 1; }
     echo "$DOC" | grep -q 'statusline: .*tminus-render' || { echo "statusline does not use the render-only entry"; echo "$DOC"; exit 1; }
     echo "   $(echo "$DOC" | grep 'statusline render' | sed 's/^[^ ]* //')"
+    # Before any prompt the wrapped statusline shows the idle segment.
+    SL_CMD="$(node -e 'const s=require(process.argv[1]);console.log(s.statusLine.command)' "$home/claude/settings.json")"
+    IDLE="$(echo '{"session_id":"smoke"}' | sh -c "$SL_CMD")"
+    echo "   statusline before a prompt: $IDLE"
+    [ "$IDLE" = "user-line │ ETA · idle" ] || { echo "unexpected idle statusline output"; exit 1; }
     # One prompt through the installed hook command, then the wrapped statusline.
     HOOK_CMD="$(node -e 'const s=require(process.argv[1]);console.log(s.hooks.UserPromptSubmit.at(-1).hooks[0].command)' "$home/claude/settings.json")"
     echo '{"session_id":"smoke","prompt_id":"p1","cwd":"/tmp","hook_event_name":"UserPromptSubmit","prompt":"fix the login bug"}' | sh -c "$HOOK_CMD"
     for _ in $(seq 1 50); do [ -f "$home/tminus/state/smoke.json" ] && break; sleep 0.1; done
-    SL_CMD="$(node -e 'const s=require(process.argv[1]);console.log(s.statusLine.command)' "$home/claude/settings.json")"
     OUT="$(echo '{"session_id":"smoke"}' | sh -c "$SL_CMD")"
-    echo "   statusline: $OUT"
-    case "$OUT" in "user-line │ ⏳"*) ;; *) echo "unexpected statusline output"; exit 1 ;; esac
+    echo "   statusline during a prompt: $OUT"
+    case "$OUT" in "user-line │ ⏳ ETA ~"*) ;; *) echo "unexpected statusline output"; exit 1 ;; esac
     "$T" uninstall --yes --purge >/dev/null
   )
   cmp "$home/claude/settings.json" "$home/original.json"
