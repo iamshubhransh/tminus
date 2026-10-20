@@ -20,36 +20,53 @@ function shq(s: string): string {
  * don't depend on where the package or an npx cache lives. Prefers Bun as the
  * runtime (fast startup keeps the statusline under 30ms).
  */
-export async function installSelf(): Promise<{ command: string; runtime: string; script: string }> {
+export interface InstalledSelf {
+  /** Runs the CLI (hooks, commands). */
+  command: string;
+  /** Runs the statusline-only entry, e.g. `bun ~/.tminus/bin/tminus-render.js render`. */
+  renderCommand: string;
+  runtime: string;
+  script: string;
+}
+
+export async function installSelf(): Promise<InstalledSelf> {
   mkdirSync(paths.binDir, { recursive: true });
   const here = fileURLToPath(import.meta.url);
   const bun = (globalThis as any).Bun ? process.execPath : which('bun');
   const runtime = bun ?? process.execPath;
-  const target = join(paths.binDir, bun ? 'tminus.js' : 'tminus.mjs');
+  const ext = bun ? '.js' : '.mjs';
+  const target = join(paths.binDir, `tminus${ext}`);
+  const renderTarget = join(paths.binDir, `tminus-render${ext}`);
 
   if (here.endsWith('.js') || here.endsWith('.mjs')) {
-    // Running from a built bundle: copy the matching bundle next to it.
+    // Running from a built bundle: copy the matching bundles next to it.
     const dir = dirname(here);
     const want = join(dir, bun ? 'tminus.js' : 'tminus.node.mjs');
     copyFileSync(existsSync(want) ? want : here, target);
+    const wantRender = join(dir, bun ? 'tminus-render.js' : 'tminus-render.node.mjs');
+    if (existsSync(wantRender)) copyFileSync(wantRender, renderTarget);
   } else if ((globalThis as any).Bun) {
     // Running from source: bundle on the fly.
-    const entry = resolve(dirname(here), 'index.ts');
-    const res = await (globalThis as any).Bun.build({
-      entrypoints: [entry], target: 'bun', format: 'esm', minify: false,
-      external: ['better-sqlite3'],
-    });
-    if (!res.success) throw new Error('bundle failed: ' + res.logs.map(String).join('\n'));
-    await (globalThis as any).Bun.write(target, await res.outputs[0].text());
+    const B = (globalThis as any).Bun;
+    const build = async (entry: string, out: string) => {
+      const res = await B.build({ entrypoints: [entry], target: 'bun', format: 'esm', minify: false, external: ['better-sqlite3'] });
+      if (!res.success) throw new Error('bundle failed: ' + res.logs.map(String).join('\n'));
+      await B.write(out, await res.outputs[0].text());
+    };
+    await build(resolve(dirname(here), 'index.ts'), target);
+    await build(resolve(dirname(here), '../../render/src/bin.ts'), renderTarget);
   } else {
     throw new Error('Run `bun run build` first, or install tminus from npm.');
   }
-  try { chmodSync(target, 0o755); } catch { /* fine */ }
-  return { command: `${shq(runtime)} ${shq(target)}`, runtime, script: target };
+  for (const f of [target, renderTarget]) { try { chmodSync(f, 0o755); } catch { /* fine */ } }
+  const command = `${shq(runtime)} ${shq(target)}`;
+  // Fall back to the full CLI if the render-only bundle is missing (older builds).
+  const renderCommand = existsSync(renderTarget) ? `${shq(runtime)} ${shq(renderTarget)} render` : `${command} render`;
+  return { command, renderCommand, runtime, script: target };
 }
 
 export function installedSelf(): { script: string; size: number } | null {
-  for (const f of ['tminus.js', 'tminus.mjs']) {
+  for (const f of ['tminus-render.js', 'tminus-render.mjs', 'tminus.js', 'tminus.mjs']) {
     const p = join(paths.binDir, f);
     try { return { script: p, size: statSync(p).size }; } catch { /* next */ }
   }

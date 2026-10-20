@@ -17,7 +17,7 @@ const MODERN_EVENTS = ['PostToolUseFailure', 'PermissionRequest', 'PermissionDen
 // Matches the installed runtime copy under any name we write (tminus.js for Bun, tminus.mjs for Node)
 // or a `tminus` binary on PATH.
 const HOOK_MARK = /tminus(?:\.m?js)?["']?\s+hook\s/;
-const RENDER_MARK = /tminus(?:\.m?js)?["']?\s+render\b/;
+const RENDER_MARK = /tminus(?:-render)?(?:\.m?js)?["']?\s+render\b/;
 
 export function isTminusHook(h: any): boolean {
   return typeof h?.command === 'string' && HOOK_MARK.test(h.command);
@@ -94,7 +94,7 @@ export function planClaudeInstall(opts: InstallOptions, version = claudeVersion(
   else if (existing && typeof existing === 'object' && existing.command) wrapped = existing;
   const sl: any = {
     type: 'command',
-    command: `${opts.tminusCommand} render --statusline${wrapped ? ' --wrap' : ''}`,
+    command: `${opts.renderCommand ?? `${opts.tminusCommand} render`} --statusline${wrapped ? ' --wrap' : ''}`,
     padding: wrapped?.padding ?? existing?.padding ?? 0,
   };
   const refresh = opts.refreshInterval !== undefined ? opts.refreshInterval : wrapped ? wrapped.refreshInterval ?? null : 1;

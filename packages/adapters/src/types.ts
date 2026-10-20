@@ -15,6 +15,8 @@ export interface InstallResult {
 export interface InstallOptions {
   /** Command prefix that runs tminus, e.g. `"/Users/me/.bun/bin/bun" "/Users/me/.tminus/bin/tminus.js"`. */
   tminusCommand: string;
+  /** Command for the statusline-only entry, ending in `render`. Defaults to `<tminusCommand> render`. */
+  renderCommand?: string;
   /** Compute the change but don't write it. */
   dryRun?: boolean;
   /** Statusline refresh interval to request, seconds (Claude Code only). */

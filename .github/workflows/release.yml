@@ -29,6 +29,8 @@ jobs:
       - run: bunx tsc --noEmit -p tsconfig.json
       - run: bun run build
       - run: bun test
+        env:
+          TMINUS_RENDER_BUDGET_MS: 60 # see ci.yml
       - run: scripts/smoke-pack.sh
 
       - name: Tag must match the package version

@@ -41,14 +41,14 @@ export async function cmdInit(a: Args): Promise<number> {
     await runBackfill(a, adapters, true);
   }
 
-  const self = dry ? { command: 'tminus' } : await installSelf();
+  const self = dry ? { command: 'tminus', renderCommand: 'tminus render' } : await installSelf();
   if (!dry) console.log(c.dim(`\nInstalled runtime copy: ${self.command}`));
 
   const refreshFlag = flagStr(a, 'refresh');
   const refreshInterval = refreshFlag === undefined ? undefined : refreshFlag === '0' ? null : Number(refreshFlag);
   let applied = 0;
   for (const ad of adapters) {
-    const plan = await ad.install({ tminusCommand: self.command, dryRun: true, refreshInterval });
+    const plan = await ad.install({ tminusCommand: self.command, renderCommand: self.renderCommand, dryRun: true, refreshInterval });
     if (!plan.changes.length) {
       console.log(`\n${ad.displayName}: already set up ${c.green('✓')}`);
       continue;
@@ -61,7 +61,7 @@ export async function cmdInit(a: Args): Promise<number> {
       console.log(c.yellow(`Skipped ${ad.displayName}.`) + (process.stdin.isTTY ? '' : ' (no TTY: re-run with --yes)'));
       continue;
     }
-    const res = await ad.install({ tminusCommand: self.command, refreshInterval });
+    const res = await ad.install({ tminusCommand: self.command, renderCommand: self.renderCommand, refreshInterval });
     for (const n of res.notes) if (!plan.notes.includes(n)) console.log(c.dim(`  · ${n}`));
     applied++;
   }

@@ -69,6 +69,10 @@ Choices made while building tminus, with the reason for each. Newest last.
 
 25. **Agent wake-up messages are turns.** When another session hands back a message (`origin.kind: "peer"`) or Claude Code auto-continues, it writes an `isMeta` user record and starts a new agent turn. The parser used to skip all `isMeta` records, which left 57 agent-initiated turns out of the author's history. In versions without `turn_duration`, it could also have merged their activity into the previous human turn. They are now `system` turns: tracked and shown, never trained on.
 
+26. **The statusline runs a render-only entry.** `tminus-render.js` (16KB) is installed next to the CLI bundle (176KB) and contains only state reading and formatting. Every redraw used to parse the whole CLI. End-to-end statusline time on the author's Mac went from 18.9ms to 15.0ms on Bun and from 29.3ms to 25.8ms on Node. A script that only reads stdin already costs ~13ms in Bun, so this is close to the floor.
+
+27. **CI enforces function on every runner, and the 30ms budget on real hardware.** GitHub's shared VMs start processes much more slowly: the same bundle took 31.8ms on a macOS runner. The end-to-end spawn benchmark therefore gets `TMINUS_RENDER_BUDGET_MS=60` in CI, while the in-process render benchmark (<5ms) stays strict. The 30ms budget is enforced by the test suite's default and by `tminus doctor` on the user's own machine. The npm-package smoke test checks behaviour (hooks recognised, wrapped statusline output, byte-exact uninstall), not timing.
+
 ## Open decisions
 - **Displayed range width.** Typical agent turns have σ ≈ 1.4 in log space, so an honest 80% interval at submit is wide ("15s–21m" for a vague prompt). A P25–P75 option would look tighter but cover only half the turns.
 - **Turns that spawn subagents are under-predicted.** Only 20% finish within the shown P50. Counting their tool calls doesn't fix that (see 24). A feature that predicts "this prompt will fan out to subagents" at submit time might.

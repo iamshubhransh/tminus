@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { ADAPTERS } from '@tminus/adapters';
 import {
   collectorPid, ensureCollector, fmtPrecise, fmtRange, fmtShort, loadConfig, openDb, paths, predictorStatus, readState,
@@ -124,11 +125,12 @@ export async function cmdDoctor(a: Args): Promise<number> {
     (backlog < 50 ? ok : warn)(`spool backlog: ${backlog} events`);
   }
 
-  // Render latency, end to end (process start -> exit), using the installed copy if present.
+  // Render latency, end to end (process start -> exit), through the exact entry the statusline uses.
   const inst = installedSelf();
   const [runtime, script] = selfCommand();
-  const target = inst?.script ?? script;
-  const runner = inst && !(globalThis as any).Bun && inst.script.endsWith('.js') ? 'bun' : runtime;
+  const builtRender = join(dirname(script), (globalThis as any).Bun ? 'tminus-render.js' : 'tminus-render.node.mjs');
+  const target = inst?.script ?? (existsSync(builtRender) ? builtRender : script);
+  const runner = target.endsWith('.js') && !(globalThis as any).Bun ? 'bun' : runtime;
   const sample = JSON.stringify({ session_id: 'doctor-probe', model: { id: 'claude-opus-5-5' }, context_window: { used_percentage: 12 } });
   const runs = Number(flagStr(a, 'runs') ?? 15);
   timeCommand([runner, target, 'render', '--statusline'], sample, 2); // warm the file cache
@@ -136,7 +138,8 @@ export async function cmdDoctor(a: Args): Promise<number> {
   const p50 = times[Math.floor(times.length / 2)];
   const p90 = times[Math.floor(times.length * 0.9)];
   (p50 < 30 ? ok : bad)(`statusline render: p50 ${p50.toFixed(1)}ms, p90 ${p90.toFixed(1)}ms over ${runs} runs (budget 30ms) via ${runner.split('/').pop()}`);
-  const hookTimes = timeCommand([runner, target, 'hook', 'DoctorProbe'], '{}', Math.min(runs, 8));
+  const cli = inst ? inst.script.replace('tminus-render', 'tminus') : script;
+  const hookTimes = timeCommand([runner, cli, 'hook', 'DoctorProbe'], '{}', Math.min(runs, 8));
   const h50 = hookTimes[Math.floor(hookTimes.length / 2)];
   (h50 < 100 ? ok : bad)(`hook: p50 ${h50.toFixed(1)}ms (budget 100ms)`);
   if (!(globalThis as any).Bun && runner !== 'bun') warn('running under Node: install Bun for the fastest statusline.');

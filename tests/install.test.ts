@@ -92,6 +92,16 @@ describe('Claude Code install/uninstall round trip', () => {
     expect(readFileSync(file, 'utf8')).toBe(original);
   });
 
+  test('the statusline uses the render-only entry when one is installed', async () => {
+    const renderCmd = `'/opt/bun' '/home/u/.tminus/bin/tminus-render.js' render`;
+    await claudeCode.install({ tminusCommand: CMD, renderCommand: renderCmd });
+    const s = JSON.parse(readFileSync(claudeSettingsPath(), 'utf8'));
+    expect(s.statusLine.command).toBe(`${renderCmd} --statusline`);
+    expect((await claudeCode.installed()).statusline).toBe(true);
+    await claudeCode.uninstall();
+    expect(existsSync(claudeSettingsPath())).toBe(false);
+  });
+
   test('refuses to touch invalid JSON', async () => {
     writeFileSync(claudeSettingsPath(), '{ not json');
     await expect(claudeCode.install({ tminusCommand: CMD })).rejects.toThrow(/not valid JSON/);

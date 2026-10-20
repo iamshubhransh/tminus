@@ -36,6 +36,11 @@ jobs:
         run: bun run build
       - name: Test
         run: bun test
+        env:
+          # The product budget is 30ms on a real machine (enforced locally and by `tminus doctor`).
+          # Shared CI VMs start processes far more slowly, so the end-to-end spawn benchmark gets headroom here;
+          # the in-process render benchmark (<5ms) stays strict.
+          TMINUS_RENDER_BUDGET_MS: 60
       - name: Smoke test the npm package as a new user (Bun and Node-only)
         run: scripts/smoke-pack.sh
 
