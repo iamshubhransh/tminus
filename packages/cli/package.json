@@ -15,7 +15,7 @@
   },
   "type": "module",
   "bin": {
-    "tminus": "./bin/tminus.js"
+    "tminus": "bin/tminus.js"
   },
   "files": [
     "bin",
