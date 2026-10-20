@@ -50,15 +50,12 @@ Claude Code redraws its status line on agent events. When tminus owns the status
 
 ## How the estimate works
 
-1. **At submit**, tminus classifies the prompt (fix, refactor, question, build a feature, …) and looks up how similar turns went for you, by model, effort and intent. A bucket with little data borrows strength from broader ones. You get the median and an 80% range.
-2. **While the agent works**, three signals update the remaining time:
-   - **elapsed time**: a turn that keeps running is probably a long one, so the estimate grows instead of freezing
-   - **the agent's todo list**: items done × time per item
-   - **tool activity**, including work done by subagents the agent spawned
+1. **At submit**, a model trained on your own history predicts the median and an 80% range from the prompt's shape (length, intent, files mentioned), the session so far, the repo, the model family and the effort level. If the last few turns in this session ran longer (or shorter) than predicted, the next prediction moves with them.
+2. **While the agent works**, a second model updates the time left from what it can see: elapsed time, tool activity (including subagents), whether a tool is running right now, and what stage the work is in, judged from what the agent says ("let me start by exploring…" vs "all tests pass") and the commands it runs (tests, builds, commits). A turn that keeps running past its estimate grows the estimate instead of freezing it.
 3. **Time waiting on you** (permission prompts, questions) doesn't count.
-4. **Every finished turn** is added to your history.
+4. **Every finished turn** is added to your history; the model is re-checked against the simpler fallback every 25 turns and only used while it wins.
 
-The full math is in [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md).
+The full method, and how it was measured, is in [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md).
 
 **Honest framing:** agent work is non-deterministic, so tminus shows ranges, not promises. Short, vague prompts ("continue", "fix it") are the least predictable. `tminus stats` tells you how well calibrated it is on your data:
 
@@ -72,6 +69,7 @@ backfill    567          ×2.8        88%       79%
 
 - Everything stays on your machine, in `~/.tminus/`. Nothing is sent anywhere.
 - **Prompt text is never stored.** The hook derives a handful of features (length, word count, intent class, number of file references, scope words) and drops the text right there. Transcripts are read during import and only the same features are kept.
+- **Neither is what the agent says or runs.** Shell commands are classified inside the hook and the agent's messages as the transcript is read, into labels like `cmd:test` or `text:early`; only the labels are stored.
 - Project paths are stored hashed. `tminus export` produces an anonymized CSV of features and durations, which contains no prompts because there are none to export.
 
 ## Supported agents
@@ -123,13 +121,14 @@ Empty tokens take their separators with them, so `{todo}` disappears cleanly whe
 
 ```sh
 bun install
-bun test          # 105 tests: features, shrinkage, survival, blending, idle time, subagents, fixtures, install round-trip, v2 gating, render benchmark
+bun test          # 126 tests: features, phase labels, booster, shrinkage, survival, live model, idle time, subagents, fixtures, install round-trip, v2 gating, render benchmark
 bun run build     # packages/cli/dist/tminus.js (Bun) + tminus.node.mjs (Node)
 bun run eval      # v1 vs v2 on rolling time folds of your history
+bun run lab -- --split dev --live v2 production   # research harness, see lab/README.md
 bun run tminus -- status
 ```
 
-Layout: `packages/core` (schema, db, features, predictor, live engine), `packages/adapters` (claude-code, codex), `packages/render` (statusline, tmux), `packages/cli`, `apps/menubar` (SwiftUI). Design decisions are in [docs/DECISIONS.md](docs/DECISIONS.md).
+Layout: `packages/core` (schema, db, features, models, live engine), `packages/adapters` (claude-code, codex), `packages/render` (statusline, tmux), `packages/cli`, `apps/menubar` (SwiftUI), `lab` (how the engine was designed and measured). Design decisions are in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## License
 

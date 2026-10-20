@@ -128,6 +128,9 @@ export async function* parseCodexRollout(
         case 'compact':
           cur.events.push({ ts: ev.ts, kind: 'compact' });
           break;
+        case 'phase':
+          if (ev.phase?.length) cur.events.push({ ts: ev.ts, kind: 'phase', meta: { c: ev.phase } });
+          break;
         case 'stop':
           yield finish(cur, 'completed', ev.ts, ev.durationMs ?? null);
           cur = null;

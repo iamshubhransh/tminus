@@ -1,9 +1,11 @@
 import { closeSync, fstatSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
 import { basename } from 'node:path';
-import type { DB } from './db.ts';
+import { getMeta, setMeta, type DB } from './db.ts';
 import { buildFeatures, hashPath, normalizeModel } from './features.ts';
+import { liveEstimate, priorQ, turnInfo, type LiveModel, type PastTurn, type PriorQ, type TurnInfo } from './gbdt.ts';
 import { estimateRemaining, QUESTION_TOOLS, TodoState, toolCategory, type LiveEstimate, type ToolCategory } from './live.ts';
 import { logError } from './log.ts';
+import { ObsTracker } from './observe.ts';
 import type { PriorResult, TrainingRow } from './predictor.ts';
 import { repoInfo } from './repo.ts';
 import {
@@ -17,12 +19,22 @@ import { TRAINABLE_TRIGGERS, type BucketKey, type Features, type NormalizedEvent
 export interface Predictor {
   readonly version: string;
   readonly size: number;
-  prior(key: BucketKey, features?: Features): PriorResult;
+  /** Learned live model, when the active predictor has one. */
+  readonly live?: LiveModel | null;
+  /** `past`: the session's recently finished turns, for predictors that correct by their recent errors. */
+  prior(key: BucketKey, features?: Features, past?: PastTurn[]): PriorResult;
   add(row: TrainingRow): void;
 }
 
-/** Adapter hook used on ticks to notice interrupts that fire no hook (e.g. Esc in Claude Code). */
-export type TranscriptProbe = (path: string, fromOffset: number) => { offset: number; interruptedAt: number | null };
+/**
+ * Adapter hook used on ticks: reads what the transcript gained since `fromOffset` to notice
+ * interrupts that fire no hook (Esc in Claude Code) and the agent's messages (phase labels).
+ */
+export type TranscriptProbe = (path: string, fromOffset: number) => {
+  offset: number;
+  interruptedAt: number | null;
+  phases?: { ts: number; labels: string[] }[];
+};
 
 export interface EngineOptions {
   db: DB;
@@ -59,7 +71,16 @@ interface LiveTurn {
   lastPredictionAt: number;
   estimate: LiveEstimate | null;
   transcriptOffset: number;
+  /** What the learned live model looks at (tool timing, phase labels). */
+  obs: ObsTracker;
+  info: TurnInfo;
+  /** Submit-time prediction as log quantiles, for the live model. */
+  q: PriorQ;
 }
+
+/** Quantile levels used for the shown P10/P90, adapted online (see `updateCalibration`). */
+interface Calibration { lo: number; hi: number }
+const CALIBRATION_STEP = 0.01;
 
 interface SessionRec {
   id: string;
@@ -93,6 +114,7 @@ export class Engine {
   predictor: Predictor;
   /** Session that most recently received an event (drives current.json). */
   currentSession: string | null = null;
+  private calibration: Calibration = { lo: 0.1, hi: 0.9 };
 
   constructor(opts: EngineOptions) {
     this.db = opts.db;
@@ -102,6 +124,10 @@ export class Engine {
     this.probes = opts.probes ?? {};
     this.predictionEveryMs = opts.predictionEveryMs ?? 15_000;
     this.countSubagentWork = opts.countSubagentWork ?? true;
+    try {
+      const c = JSON.parse(getMeta(this.db, 'calibration') ?? 'null');
+      if (c && Number.isFinite(c.lo) && Number.isFinite(c.hi)) this.calibration = { lo: c.lo, hi: c.hi };
+    } catch { /* default levels */ }
     this.refreshHistory();
   }
 
@@ -181,12 +207,13 @@ export class Engine {
       }
       const s = this.session({ agent: r.agent, sessionId: r.session_id, kind: 'session_start', ts: r.submitted_at, model: r.model, effort: r.effort, mode: r.mode });
       if (s.turn) this.close(s, 'interrupted', s.turn.lastEventAt);
-      const prior = this.predictor.prior({ model: r.model, effort: r.effort, intent: features.prompt.intent }, features);
+      const prior = this.predictor.prior({ model: r.model, effort: r.effort, intent: features.prompt.intent }, features, sessionPast(this.db, r.session_id, r.submitted_at));
       const t: LiveTurn = {
         id: r.id, promptId: r.ext_id, trigger: (r.trigger ?? 'human') as Trigger, submittedAt: r.submitted_at, features, prior,
         initial: { p10: r.predicted_p10_ms ?? prior.dist.quantile(0.1), p50: r.predicted_p50_ms ?? prior.dist.quantile(0.5), p90: r.predicted_p90_ms ?? prior.dist.quantile(0.9) },
         idle: new IdleClock(), waitOwner: null, toolCalls: 0, subagentCalls: 0, toolHistory: [], todo: null,
         lastEventAt: lastTs, lastPredictionAt: 0, estimate: null, transcriptOffset: 0,
+        obs: new ObsTracker(), info: turnInfo(r.agent, features), q: priorQ(prior.dist),
       };
       for (const e of events) {
         const meta = e.meta_json ? JSON.parse(e.meta_json) : {};
@@ -194,6 +221,7 @@ export class Engine {
         this.apply(t, {
           agent: r.agent, sessionId: r.session_id, kind: e.kind as any, ts: e.ts, toolName: e.tool_name,
           durationMs: meta.durationMs ?? null, reason: meta.reason ?? null, subagentId: meta.subagent ? 'sub' : null, todo,
+          phase: e.kind === 'phase' && Array.isArray(meta.c) ? meta.c : null,
         });
       }
       s.turn = t;
@@ -219,6 +247,12 @@ export class Engine {
           if (r.interruptedAt && r.interruptedAt >= t.submittedAt) {
             this.close(s, 'interrupted', Math.max(t.lastEventAt, r.interruptedAt));
             continue;
+          }
+          for (const p of r.phases ?? []) {
+            if (p.ts < t.submittedAt) continue;
+            const ev: NormalizedEvent = { agent: s.agent, sessionId: s.id, kind: 'phase', ts: p.ts, phase: p.labels };
+            this.apply(t, ev);
+            this.record(s, t, ev);
           }
         } catch (e) { logError('collector', 'probe failed', e); }
       }
@@ -258,8 +292,9 @@ export class Engine {
     else if (implicit) features.prompt.intent = 'other';
 
     const key: BucketKey = { model: features.session.model, effort: features.session.effort, intent: features.prompt.intent };
-    const prior = this.predictor.prior(key, features);
-    const initial: Prediction = { p10: prior.dist.quantile(0.1), p50: prior.dist.quantile(0.5), p90: prior.dist.quantile(0.9) };
+    const prior = this.predictor.prior(key, features, sessionPast(this.db, s.id, ev.ts));
+    const { lo, hi } = this.calibration;
+    const initial: Prediction = { p10: prior.dist.quantile(lo), p50: prior.dist.quantile(0.5), p90: prior.dist.quantile(hi) };
     const baseId = ev.promptId ?? `live-${ev.ts}`;
     // A reused prompt id gets the same #2, #3 suffix backfill gives it, so the two stay deduplicated.
     let id: number | null = null;
@@ -276,6 +311,7 @@ export class Engine {
       id, promptId: ev.promptId ?? null, trigger: features.trigger, submittedAt: ev.ts, features, prior, initial,
       idle: new IdleClock(), waitOwner: null, toolCalls: 0, subagentCalls: 0, toolHistory: [], todo: null,
       lastEventAt: ev.ts, lastPredictionAt: 0, estimate: null, transcriptOffset: fileSize(s.transcriptPath),
+      obs: new ObsTracker(), info: turnInfo(s.agent, features), q: priorQ(prior.dist),
     };
     s.turn = t;
     if (!repo && s.cwd) this.fillRepoLater(t, s.cwd);
@@ -325,14 +361,17 @@ export class Engine {
           t.toolCalls++;
           t.toolHistory.push(toolCategory(ev.toolName));
           if (t.toolHistory.length > 200) t.toolHistory.shift();
+          t.obs.toolStart(ev.toolName, this.elapsed(t, ev.ts));
         } else if (samePrompt(ev.promptId, t.promptId)) {
           // A background subagent from an earlier prompt is not this turn's work.
           t.subagentCalls++;
+          t.obs.toolStart(ev.toolName, 0, true);
         }
         if (ev.toolName && QUESTION_TOOLS.test(ev.toolName)) {
           t.idle.startWait(ev.ts, 'question');
           t.waitOwner = owner;
         }
+        if (ev.phase?.length && !ev.subagentId) t.obs.phaseLabels(ev.phase, this.elapsed(t, ev.ts));
         break;
       }
       case 'tool_end': {
@@ -342,14 +381,22 @@ export class Engine {
           t.idle.endWait(end);
           t.waitOwner = null;
         }
+        t.obs.toolEnd(this.elapsed(t, ev.ts), !!ev.subagentId);
         break;
       }
       case 'waiting_user':
         t.idle.startWait(ev.ts, ev.reason ?? 'waiting');
         if (t.waitOwner === null) t.waitOwner = owner;
+        t.obs.waiting();
         break;
       case 'resumed':
         if (t.idle.waiting) { t.idle.endWait(ev.ts); t.waitOwner = null; }
+        break;
+      case 'compact':
+        t.obs.compact();
+        break;
+      case 'phase':
+        if (ev.phase?.length && !ev.subagentId) t.obs.phaseLabels(ev.phase, this.elapsed(t, ev.ts));
         break;
       default:
         break;
@@ -369,8 +416,13 @@ export class Engine {
     if (ev.reason) meta.reason = ev.reason;
     if (ev.subagentId) meta.subagent = true;
     if (ev.todo && t?.todo) meta.todo = { done: t.todo.done, total: t.todo.total };
+    if (ev.kind === 'phase') meta.c = ev.phase ?? [];
     try {
       insertEvent(this.db, t?.id ?? null, { ts: ev.ts, kind: ev.kind, toolName: ev.toolName ?? null, meta: Object.keys(meta).length ? meta : null });
+      // Phase labels that arrived with a tool call (hooks) are stored as their own row, like backfill stores them.
+      if (ev.kind !== 'phase' && ev.phase?.length && !ev.subagentId) {
+        insertEvent(this.db, t?.id ?? null, { ts: ev.ts, kind: 'phase', toolName: null, meta: { c: ev.phase } });
+      }
     } catch (e) { logError('collector', `event insert failed for ${s.id}`, e); }
   }
 
@@ -388,15 +440,31 @@ export class Engine {
     if (!t) return;
     const now = Math.max(this.now(), t.lastEventAt);
     try {
-      t.estimate = estimateRemaining({
-        elapsedMs: this.elapsed(t, now),
-        prior: t.prior.dist,
-        toolCalls: this.work(t),
-        toolHistory: t.toolHistory,
-        todo: t.todo,
-        perTaskPriorMs: t.prior.perTaskMs,
-        bucketCalls: t.prior.calls,
-      });
+      const elapsedMs = this.elapsed(t, now);
+      const lm = this.predictor.live;
+      if (lm) {
+        // Learned live model, blended with the survival-conditioned prior.
+        const e = liveEstimate(lm, t.info, t.prior.dist, t.q, t.obs.snapshot(elapsedMs));
+        const p50 = e.blended.p50;
+        t.estimate = {
+          elapsedMs,
+          p10RemainingMs: Math.min(e.blended.p10, p50 * 0.9),
+          p50RemainingMs: p50,
+          p90RemainingMs: Math.max(e.blended.p90, p50 * 1.1),
+          weights: { prior: 1 - lm.blend, todo: 0, activity: 0, learned: lm.blend },
+          signals: { prior: e.survival, todo: null, activity: e.learned },
+        };
+      } else {
+        t.estimate = estimateRemaining({
+          elapsedMs,
+          prior: t.prior.dist,
+          toolCalls: this.work(t),
+          toolHistory: t.toolHistory,
+          todo: t.todo,
+          perTaskPriorMs: t.prior.perTaskMs,
+          bucketCalls: t.prior.calls,
+        });
+      }
     } catch (e) {
       logError('collector', 'estimate failed', e);
       return;
@@ -424,6 +492,7 @@ export class Engine {
         model: t.features.session.model, effort: t.features.session.effort, intent: t.features.prompt.intent,
         activeMs: active, toolCalls: this.work(t), todoTotal: t.todo?.total ?? 0,
       });
+      this.updateCalibration(t.initial, active);
     }
     s.last = {
       finishedAt, actualMs: active, p50Ms: t.initial.p50, p90Ms: t.initial.p90, outcome, intent: t.features.prompt.intent,
@@ -432,6 +501,19 @@ export class Engine {
     s.turn = null;
     this.refreshHistory();
     this.emit(s, this.now());
+  }
+
+  /**
+   * Adaptive conformal calibration (Gibbs & Candès 2021), one-sided per end:
+   * if a turn ran past the shown P90, the level used for P90 moves up a little,
+   * otherwise it drifts down slightly (same for P10). The shown range stays
+   * honest when the kind of work shifts away from the history it learned on.
+   */
+  private updateCalibration(shown: Prediction, actualMs: number): void {
+    const c = this.calibration;
+    c.hi = Math.min(0.995, Math.max(0.5, c.hi + CALIBRATION_STEP * ((actualMs > shown.p90 ? 1 : 0) - 0.1)));
+    c.lo = Math.max(0.005, Math.min(0.5, c.lo - CALIBRATION_STEP * ((actualMs < shown.p10 ? 1 : 0) - 0.1)));
+    try { setMeta(this.db, 'calibration', JSON.stringify({ lo: +c.lo.toFixed(4), hi: +c.hi.toFixed(4) })); } catch (e) { logError('collector', 'calibration save failed', e); }
   }
 
   /**
@@ -523,6 +605,27 @@ const repoCacheMem = new Map<string, { files: number | null; language: string | 
 /** Only returns a repo scan already done by this process; otherwise null (filled in after the first estimate). */
 function repoInfoCached(cwd: string | null): { files: number | null; language: string | null } | null {
   return cwd ? repoCacheMem.get(cwd) ?? null : null;
+}
+
+/** The session's last few trainable turns that finished before `before`, oldest first (for the session correction). */
+export function sessionPast(db: DB, sessionId: string, before: number, k = 3): PastTurn[] {
+  try {
+    const rows = db.prepare(`
+      SELECT id, features_json, active_ms, outcome, trigger FROM turns
+      WHERE session_id = ? AND finished_at IS NOT NULL AND finished_at < ? ORDER BY finished_at DESC LIMIT 20
+    `).all(sessionId, before) as { id: number; features_json: string | null; active_ms: number | null; outcome: string | null; trigger: string | null }[];
+    const out: PastTurn[] = [];
+    for (const r of rows) {
+      if (out.length >= k) break;
+      const f = parseFeatures(r.features_json);
+      if (!f || !isTrainable(r)) continue;
+      out.push({ id: r.id, features: f, activeMs: r.active_ms ?? 0 });
+    }
+    return out.reverse();
+  } catch (e) {
+    logError('collector', 'session history failed', e);
+    return [];
+  }
 }
 
 /** Does a subagent event belong to this turn? Prompt ids may carry a #n suffix for reused ids. */

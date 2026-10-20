@@ -4,3 +4,4 @@ packages/cli/dist/
 apps/menubar/.build/
 *.log
 .DS_Store
+lab/.scratch*

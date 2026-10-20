@@ -52,7 +52,9 @@ export async function cmdStatus(a: Args): Promise<number> {
       ['prior bucket', `${t.bucket.level} (n=${t.bucket.n})`],
       ['tool calls', `${t.toolCalls}${t.subagentToolCalls ? ` (+${t.subagentToolCalls} in subagents)` : ''}`],
       ['todo', t.todo ? `${t.todo.done}/${t.todo.total} done` : '–'],
-      ['signal weights', `prior ${pct(t.weights.prior)} · todo ${pct(t.weights.todo)} · activity ${pct(t.weights.activity)}`],
+      ['signal weights', t.weights.learned != null
+        ? `learned live model ${pct(t.weights.learned)} · survival prior ${pct(t.weights.prior)}`
+        : `prior ${pct(t.weights.prior)} · todo ${pct(t.weights.todo)} · activity ${pct(t.weights.activity)}`],
     ];
     if (t.waitingSince) rows.push(['waiting since', `${fmtPrecise(now - t.waitingSince)} (${t.waitingReason ?? 'user'})`]);
     console.log(table(rows.map(([k, v]) => [c.dim(k), v])));

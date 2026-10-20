@@ -1,6 +1,6 @@
 {
   "name": "@iamshubhransh/tminus",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Live ETA for AI coding agents (Claude Code, Codex) in your terminal status line",
   "license": "MIT",
   "author": "Shubhransh Bhaskar",

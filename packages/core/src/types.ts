@@ -66,6 +66,8 @@ export type EventKind =
   | 'subagent_start'
   | 'subagent_stop'
   | 'compact'
+  /** Phase labels (see phase.ts) derived from the agent's text or shell commands; labels only. */
+  | 'phase'
   | 'stop'
   | 'error'
   | 'session_end';
@@ -101,6 +103,11 @@ export interface NormalizedEvent {
   contextPct?: number | null;
   /** Set when the event comes from a subagent rather than the main thread. */
   subagentId?: string | null;
+  /**
+   * Phase labels derived inside the hook / parser from a shell command or the
+   * agent's text (e.g. ['cmd:test']). The text itself goes no further.
+   */
+  phase?: string[] | null;
 }
 
 export interface TurnEvent {

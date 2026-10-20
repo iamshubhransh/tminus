@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  BucketPredictor, Engine, openDb, paths, promptFeatures, readState, type NormalizedEvent, type TrainingRow,
+  BucketPredictor, buildFeatures, Engine, GbdtPredictor, getMeta, importTurns, openDb, paths, promptFeatures, readState, trainGbdt,
+  type NormalizedEvent, type NormalizedTurn, type TrainingRow, type TrainTurn,
 } from '@tminus/core';
 
 const T0 = Date.parse('2026-10-20T10:00:00Z');
@@ -195,5 +196,86 @@ describe('countSubagentWork = false', () => {
     const s = engine.snapshot('off')!;
     expect(s.turn!.subagentToolCalls).toBe(12);
     expect(s.turn!.weights.activity).toBe(0); // no main-thread calls, so no activity signal
+  });
+});
+
+describe('v2 engine: learned live model, phase labels, calibration', () => {
+  /** A small v2 model trained on synthetic turns that carry phase labels. */
+  function v2Predictor() {
+    const turns: TrainTurn[] = Array.from({ length: 120 }, (_, i) => {
+      const at = T0 - (200 - i) * 3_600_000;
+      const ms = (i % 2 ? 60_000 : 300_000) * (0.7 + (i % 5) / 10);
+      const features = buildFeatures(i % 2 ? 'fix the bug' : 'build the settings page', at, 'human', { model: 'claude-opus-5-5', effort: 'high' });
+      return {
+        id: i, features, activeMs: ms, agent: 'claude-code', submittedAt: at,
+        events: [
+          { ts: at + 1_000, kind: 'phase', meta: { c: ['text', 'text:early'] } },
+          ...Array.from({ length: Math.round(ms / 20_000) }, (_, k) => ({ ts: at + k * 20_000, kind: 'tool_start', toolName: 'Read' })),
+          { ts: at + ms * 0.8, kind: 'phase', meta: { c: ['cmd:test'] } },
+        ].sort((a, b) => a.ts - b.ts),
+      };
+    });
+    const model = trainGbdt(turns, { rounds: 30 });
+    return new GbdtPredictor(BucketPredictor.train(history(40, 60_000)), model);
+  }
+
+  test('the learned live model drives the estimate; hook phase labels are stored as their own rows', () => {
+    const db = openDb(':memory:');
+    let now = T0;
+    const engine = new Engine({ db, predictor: v2Predictor(), now: () => now, writeStates: false });
+    const base = { agent: 'claude-code', sessionId: 'v2s', promptId: 'p1' } as const;
+    engine.handle({ ...base, kind: 'prompt_submit', ts: now, promptFeatures: promptFeatures('build the settings page'), trigger: 'human' });
+    now += 20_000;
+    engine.handle({ ...base, kind: 'tool_start', ts: now, toolName: 'Bash', toolUseId: 'b1', phase: ['cmd:test'] });
+    const st = engine.snapshot('v2s')!;
+    expect(st.turn!.weights.learned).toBe(0.5);
+    expect(st.turn!.p10RemainingMs).toBeLessThan(st.turn!.p50RemainingMs);
+    expect(st.turn!.p50RemainingMs).toBeLessThan(st.turn!.p90RemainingMs);
+    const rows = db.prepare(`SELECT kind, tool_name, meta_json FROM events ORDER BY id`).all() as any[];
+    expect(rows.map((r) => r.kind)).toEqual(['prompt_submit', 'tool_start', 'phase']);
+    expect(JSON.parse(rows[2].meta_json)).toEqual({ c: ['cmd:test'] });
+  });
+
+  test('phase labels from the transcript probe are applied and stored', () => {
+    const db = openDb(':memory:');
+    let now = T0;
+    const probe = () => ({ offset: 1, interruptedAt: null, phases: [{ ts: T0 + 5_000, labels: ['text', 'text:middle'] }] });
+    const engine = new Engine({ db, predictor: v2Predictor(), now: () => now, writeStates: false, probes: { 'claude-code': probe } });
+    engine.handle({ agent: 'claude-code', sessionId: 'pr', promptId: 'p1', kind: 'prompt_submit', ts: now, transcriptPath: '/dev/null', promptFeatures: promptFeatures('fix the bug'), trigger: 'human' });
+    now += 6_000;
+    engine.tick();
+    const phases = db.prepare(`SELECT meta_json FROM events WHERE kind = 'phase'`).all() as any[];
+    expect(phases.map((r) => JSON.parse(r.meta_json).c)).toEqual([['text', 'text:middle']]);
+  });
+
+  test('a turn that runs past the shown P90 widens the next ranges (adaptive calibration)', () => {
+    const h = setup(history(40, 60_000));
+    h.at(0); h.send('prompt_submit', { promptFeatures: promptFeatures('fix the login bug'), trigger: 'human' });
+    h.at(3600); h.send('stop');
+    const c = JSON.parse(getMeta(h.db, 'calibration')!);
+    expect(c.hi).toBeGreaterThan(0.9);
+    expect(c.lo).toBeGreaterThan(0.1);
+  });
+});
+
+describe('re-importing history brings old turns up to date', () => {
+  test('effort and phase labels are added once; nothing is deleted', () => {
+    const db = openDb(':memory:');
+    const at = T0 - 86_400_000;
+    const make = (withNew: boolean): NormalizedTurn => ({
+      agent: 'claude-code', sessionId: 'old', extId: 'p1', projectHash: null, sessionStartedAt: at, submittedAt: at, finishedAt: at + 60_000,
+      idleMs: 0, outcome: 'completed', model: 'claude-opus-5-5', effort: withNew ? 'medium' : null, mode: null, contextPct: null,
+      features: buildFeatures('fix it', at, 'human', { model: 'claude-opus-5-5', effort: withNew ? 'medium' : null }),
+      toolCalls: 1, subagentToolCalls: 0, todoTotal: 0, agentDurationMs: 60_000,
+      events: [{ ts: at, kind: 'prompt_submit' }, ...(withNew ? [{ ts: at + 1_000, kind: 'phase' as const, meta: { c: ['text', 'text:early'] } }] : []), { ts: at + 60_000, kind: 'stop' }],
+    });
+    expect(importTurns(db, [make(false)]).imported).toBe(1);
+    expect(importTurns(db, [make(true)]).enriched).toBe(1);
+    expect(importTurns(db, [make(true)]).enriched).toBe(0);
+    const row = db.prepare(`SELECT effort, features_json FROM turns`).get() as any;
+    expect(row.effort).toBe('medium');
+    expect(JSON.parse(row.features_json).session.effort).toBe('medium');
+    expect(db.prepare(`SELECT COUNT(*) n FROM events WHERE kind = 'phase'`).get().n).toBe(1);
+    expect(db.prepare(`SELECT COUNT(*) n FROM turns`).get().n).toBe(1);
   });
 });

@@ -1,6 +1,7 @@
 import type { DB } from './db.ts';
 import { LogMixture } from './dist.ts';
-import { gbdtDistribution, trainGbdt, type GbdtModel } from './gbdt.ts';
+import { gbdtDistribution, liveEstimate, priorQ, trainGbdt, turnInfo, type GbdtModel, type PastTurn, type TrainTurn } from './gbdt.ts';
+import { eventsFromRows, replayObs } from './observe.ts';
 import { estimateRemaining, QUESTION_TOOLS, TodoState, toolCategory, type LiveEstimate, type ToolCategory } from './live.ts';
 import { BucketPredictor, TRAIN_CAP_MS, type PriorResult } from './predictor.ts';
 import { median } from './stats.ts';
@@ -201,7 +202,9 @@ export function liveQuality(db: DB, source: 'live' | 'backfill' | null = null, o
 // ---------------------------------------------------------------------------
 // v1 vs v2, rolling-origin: several consecutive time folds, each trained only
 // on the turns before it. One split can flatter either model; a model has to
-// win on the pooled numbers *and* on most folds to be promoted.
+// win on the pooled numbers *and* on most folds to be promoted. Each test turn
+// is predicted exactly as the collector would: v2 with its session correction
+// (errors on the session's earlier turns) and its learned live model.
 
 export interface LiveCalibration {
   /** Median |log(predicted total / actual)| at 25/50/75% of the turn. */
@@ -236,21 +239,38 @@ export interface EvalReport {
 
 const LIVE_POINTS = [0.25, 0.5, 0.75];
 
-function liveCalibration(turns: { row: TurnRow; events: EventRow[]; prior: PriorResult }[], opts: { subagents?: boolean }): LiveCalibration {
+/** Remaining-time quantiles at each active-elapsed point of a finished turn. */
+type LiveReplay = (points: number[]) => { p10: number; p50: number; p90: number }[];
+
+function liveCalibration(turns: { row: TurnRow; replay: LiveReplay }[]): LiveCalibration {
   const errs: number[][] = LIVE_POINTS.map(() => []);
   let snaps = 0, in50 = 0, in90 = 0;
-  for (const { row, events, prior } of turns) {
-    const actual = row.active_ms ?? 0;
-    simulateLive(row, events, prior, LIVE_POINTS, opts).forEach((e, i) => errs[i].push(e));
+  for (const { row, replay } of turns) {
+    const actual = Math.max(row.active_ms ?? 0, 1);
+    const pts = LIVE_POINTS.map((f) => f * actual);
+    replay(pts).forEach((e, i) => errs[i].push(Math.abs(Math.log((pts[i] + e.p50) / actual))));
     const grid: number[] = [];
     for (let t = 3000; t < actual; t *= 1.5) grid.push(t);
-    replayEstimates(row, events, prior, grid, opts).forEach((est, i) => {
+    replay(grid).forEach((e, i) => {
       snaps++;
-      if (actual - grid[i] <= est.p50RemainingMs) in50++;
-      if (actual - grid[i] <= est.p90RemainingMs) in90++;
+      if (actual - grid[i] <= e.p50) in50++;
+      if (actual - grid[i] <= e.p90) in90++;
     });
   }
   return { mdae: errs.map((e) => (e.length ? median(e) : NaN)), runningP50: snaps ? in50 / snaps : NaN, runningP90: snaps ? in90 / snaps : NaN, snapshots: snaps };
+}
+
+function trainTurn(r: TurnRow, events: EventRow[]): TrainTurn {
+  return { id: r.id, features: parseFeatures(r.features_json)!, activeMs: Math.min(r.active_ms!, TRAIN_CAP_MS), agent: r.agent, submittedAt: r.submitted_at, events: eventsFromRows(events) };
+}
+
+/** The session's last 3 trainable turns that finished before `r` was submitted. */
+function pastFor(r: TurnRow, all: TurnRow[]): PastTurn[] {
+  return all
+    .filter((u) => u.session_id === r.session_id && u.finished_at != null && u.finished_at < r.submitted_at)
+    .sort((a, b) => a.finished_at! - b.finished_at!)
+    .slice(-3)
+    .map((u) => ({ id: u.id, features: parseFeatures(u.features_json)!, activeMs: u.active_ms ?? 0 }));
 }
 
 export function evaluate(db: DB, opts: { folds?: number; minTrain?: number; rounds?: number; subagents?: boolean } = {}): EvalReport {
@@ -263,30 +283,32 @@ export function evaluate(db: DB, opts: { folds?: number; minTrain?: number; roun
   if (block < 5) return empty;
 
   const evStmt = db.prepare(`SELECT ts, kind, tool_name, meta_json FROM events WHERE turn_id = ? ORDER BY ts, id`);
+  const events = new Map<number, EventRow[]>();
+  const eventsOf = (r: TurnRow) => { let e = events.get(r.id); if (!e) { e = evStmt.all(r.id) as EventRow[]; events.set(r.id, e); } return e; };
   const score = (r: TurnRow, p: Prediction): Scored => ({
     actual: Math.min(r.active_ms!, TRAIN_CAP_MS), pred: p, intent: parseFeatures(r.features_json)!.prompt.intent, model: r.model ?? '?', source: r.source,
   });
   const folds: FoldResult[] = [];
   const all1: Scored[] = [], all2: Scored[] = [];
-  const live1: Parameters<typeof liveCalibration>[0] = [], live2: Parameters<typeof liveCalibration>[0] = [];
+  const live1: { row: TurnRow; replay: LiveReplay }[] = [], live2: { row: TurnRow; replay: LiveReplay }[] = [];
 
   for (let k = 0; k < nFolds; k++) {
     const cut = minTrain + k * block;
-    const train = rows.slice(0, cut);
     const test = rows.slice(cut, k === nFolds - 1 ? rows.length : cut + block);
+    const train = rows.slice(0, cut).filter((r) => r.finished_at! < test[0].submitted_at);
     const v1 = BucketPredictor.train(train.map((r) => toTrainingRow(r, sub)));
-    const model = trainGbdt(train.map((r) => parseFeatures(r.features_json)!), train.map((r) => Math.min(r.active_ms!, TRAIN_CAP_MS)), { rounds: opts.rounds });
+    const model = trainGbdt(train.map((r) => trainTurn(r, eventsOf(r))), { rounds: opts.rounds });
     const s1: Scored[] = [], s2: Scored[] = [];
     for (const r of test) {
       const f = parseFeatures(r.features_json)!;
       const prior1 = v1.prior({ model: r.model, effort: r.effort, intent: f.prompt.intent });
       // Score exactly the distribution the live engine would use for this turn.
-      const d2 = gbdtDistribution(model, f);
+      const d2 = gbdtDistribution(model, f, pastFor(r, rows));
       s1.push(score(r, { p10: prior1.dist.quantile(0.1), p50: prior1.dist.quantile(0.5), p90: prior1.dist.quantile(0.9) }));
       s2.push(score(r, { p10: d2.quantile(0.1), p50: d2.quantile(0.5), p90: d2.quantile(0.9) }));
-      const events = evStmt.all(r.id) as EventRow[];
-      live1.push({ row: r, events, prior: prior1 });
-      live2.push({ row: r, events, prior: { ...prior1, dist: d2 } });
+      const ev = eventsOf(r);
+      live1.push({ row: r, replay: (pts) => replayEstimates(r, ev, prior1, pts, sub).map((e) => ({ p10: e.p10RemainingMs, p50: e.p50RemainingMs, p90: e.p90RemainingMs })) });
+      live2.push({ row: r, replay: v2Replay(model, r, ev, d2, prior1, sub) });
     }
     all1.push(...s1);
     all2.push(...s2);
@@ -294,7 +316,7 @@ export function evaluate(db: DB, opts: { folds?: number; minTrain?: number; roun
   }
 
   const m1 = metrics(all1), m2 = metrics(all2);
-  const l1 = liveCalibration(live1, sub), l2 = liveCalibration(live2, sub);
+  const l1 = liveCalibration(live1), l2 = liveCalibration(live2);
   const foldWins = folds.filter((f) => f.v2.mdae < f.v1.mdae).length;
   const calGap = (m: Metrics) => Math.abs(m.underP90 - 0.9);
   const liveGap = (l: LiveCalibration) => Math.abs(l.runningP90 - 0.9);
@@ -312,11 +334,25 @@ export function evaluate(db: DB, opts: { folds?: number; minTrain?: number; roun
   };
 }
 
+/** What v2 shows while a turn runs: its learned live model if it has one, else the blend over its prior. */
+function v2Replay(model: GbdtModel, r: TurnRow, ev: EventRow[], d2: LogMixture, prior1: PriorResult, sub: { subagents?: boolean }): LiveReplay {
+  const lm = model.live;
+  if (!lm) return (pts) => replayEstimates(r, ev, { ...prior1, dist: d2 }, pts, sub).map((e) => ({ p10: e.p10RemainingMs, p50: e.p50RemainingMs, p90: e.p90RemainingMs }));
+  const info = turnInfo(r.agent, parseFeatures(r.features_json)!);
+  const q = priorQ(d2);
+  const evs = eventsFromRows(ev);
+  return (pts) => replayObs(evs, r.submitted_at, pts).map((o) => {
+    const b = liveEstimate(lm, info, d2, q, o).blended;
+    return { p10: Math.min(b.p10, b.p50 * 0.9), p50: b.p50, p90: Math.max(b.p90, b.p50 * 1.1) };
+  });
+}
+
 /** Train the v2 model on every trainable turn (used after it has won the evaluation). */
 export function trainV2(db: DB, rounds?: number): GbdtModel | null {
   const rows = finishedTurns(db).filter(isTrainable).filter((r) => parseFeatures(r.features_json));
   if (rows.length < 60) return null;
-  return trainGbdt(rows.map((r) => parseFeatures(r.features_json)!), rows.map((r) => Math.min(r.active_ms!, TRAIN_CAP_MS)), { rounds });
+  const evStmt = db.prepare(`SELECT ts, kind, tool_name, meta_json FROM events WHERE turn_id = ? ORDER BY ts, id`);
+  return trainGbdt(rows.map((r) => trainTurn(r, evStmt.all(r.id) as EventRow[])), { rounds });
 }
 
 const fmtX = (logErr: number) => `×${Math.exp(logErr).toFixed(2)}`;

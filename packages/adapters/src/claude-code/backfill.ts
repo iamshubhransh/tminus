@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  buildFeatures, claudeDir, hashPath, normalizeEffort, normalizeModel, readJsonl, repoInfo, tsOf, unionLength,
+  buildFeatures, claudeDir, commandPhase, hashPath, normalizeEffort, normalizeModel, readJsonl, repoInfo, textPhase, tsOf, unionLength,
   type NormalizedTurn, type Outcome, type TodoChange, type TodoStatus, type Trigger, type TurnEvent,
 } from '@tminus/core';
 
@@ -9,9 +9,9 @@ import {
  * Claude Code transcript format (observed on 2.1.272 – 2.1.304, see docs/AGENT_FORMATS.md):
  * one JSONL per session under ~/.claude/projects/<cwd-slug>/<session-id>.jsonl. Relevant records:
  *   user        prompt (string/array content) or tool_result (array content); origin.kind, promptId
- *   assistant   message.model, message.content[].tool_use, message.usage, stop_reason
+ *   assistant   message.model, message.content[].tool_use, message.usage, stop_reason, effort / perTurnEffort
  *   system      subtype turn_duration {durationMs} marks the end of a turn
- *   api-request params.output_config.effort
+ *   api-request params.output_config.effort (newer versions; assistant records carry it from 2.1.2xx)
  *   permission-mode {permissionMode}
  * Subagents live in <session-id>/subagents/*.jsonl and are not separate turns.
  */
@@ -19,8 +19,8 @@ import {
 const QUESTION_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']);
 const AGENT_WAKE_ORIGINS = new Set(['peer', 'auto-continuation', 'task-notification']);
 const INTERRUPT_RE = /^\[Request interrupted by user/;
-/** User messages that are UI output, not prompts. */
-const NON_PROMPT_RE = /^<(local-command-stdout|local-command-stderr|local-command-caveat|bash-stdout|bash-stderr)>/;
+/** User messages that are UI output or `!` shell commands the user ran themselves, not prompts. */
+const NON_PROMPT_RE = /^<(local-command-stdout|local-command-stderr|local-command-caveat|bash-input|bash-stdout|bash-stderr)>/;
 
 /** Repo size/language for a project directory (cached on disk per repo, refreshed daily). */
 export function repoFor(cwd: string | null): { repoFiles: number | null; repoLanguage: string | null } {
@@ -73,6 +73,10 @@ class TurnBuilder {
   todoSeen = false;
   taskSeq = 0;
   subagentCalls = 0;
+  /** Text of the turn's latest assistant message (research hook only; never stored). */
+  lastText: string | null = null;
+  /** Research hook only: raw assistant text and Bash commands with timestamps, in order. Never stored. */
+  research: { ts: number; kind: 'text' | 'cmd'; text: string }[] = [];
 
   constructor(
     /** The prompt id as Claude Code wrote it (subagents carry the same id). */
@@ -196,10 +200,22 @@ function toolResultText(tr: any): string {
  * Reconstruct turns from one session transcript: user prompt -> final assistant
  * message (or the turn_duration marker Claude Code writes when a turn ends).
  */
+export interface TurnText {
+  prompt: string;
+  /** The previous turn's last assistant message in this session. */
+  prevAssistant: string | null;
+  /** Assistant text and shell commands during the turn, with timestamps. */
+  during: { ts: number; kind: 'text' | 'cmd'; text: string }[];
+}
+
 export async function* parseClaudeTranscript(
   file: string,
   stats?: { bad: number; lines: number },
-  opts: { skipOpenTail?: boolean } = {},
+  opts: {
+    skipOpenTail?: boolean;
+    /** Research only (lab/): receives each turn's raw text in memory. Nothing passed here is ever stored. */
+    onText?: (turn: NormalizedTurn, text: TurnText) => void;
+  } = {},
 ): AsyncGenerator<NormalizedTurn> {
   let sessionId: string | null = null;
   let cwd: string | null = null;
@@ -212,6 +228,7 @@ export async function* parseClaudeTranscript(
   let cur: TurnBuilder | null = null;
   let turnIndex = 0;
   const recent: number[] = [];
+  let prevAssistant: string | null = null;
   // Per-turn context snapshot taken at submit time.
   let curContext: number | null = null;
   // Claude Code can reuse a promptId for a later turn in the same session; number the repeats.
@@ -251,7 +268,7 @@ export async function* parseClaudeTranscript(
     turnIndex++;
     recent.push(active);
     if (recent.length > 3) recent.shift();
-    return {
+    const turn: NormalizedTurn = {
       agent: 'claude-code',
       sessionId: sessionId!,
       extId: b.extId,
@@ -272,6 +289,9 @@ export async function* parseClaudeTranscript(
       agentDurationMs: b.durationMs,
       events: b.events.sort((x, y) => x.ts - y.ts),
     };
+    opts.onText?.(turn, { prompt: b.prompt, prevAssistant, during: b.research });
+    if (b.lastText) prevAssistant = b.lastText;
+    return turn;
   };
 
   const subCalls = await loadSubagentCalls(file);
@@ -358,19 +378,33 @@ export async function* parseClaudeTranscript(
         }
         const m = typeof msg?.model === 'string' && !msg.model.startsWith('<') ? normalizeModel(msg.model) : null;
         if (m) model = m;
+        // Effort used for this request; older transcripts only have it on api-request records.
+        const e = m ? normalizeEffort(rec.effort ?? rec.perTurnEffort) : null;
+        if (e) effort = e;
         if (!cur || !ts) break;
         cur.touch(ts);
         cur.assistantMsgs++;
         if (m && !cur.model) cur.model = m;
+        if (e && !cur.effort) cur.effort = e;
         if (rec.isApiErrorMessage) cur.errored = true;
         if (msg?.stop_reason) cur.lastStopReason = msg.stop_reason;
         if (Array.isArray(msg?.content)) {
+          // Phase labels from what the agent says and runs; the text itself is not kept.
+          const text = msg.content.filter((c: any) => c?.type === 'text' && typeof c.text === 'string').map((c: any) => c.text).join('\n');
+          if (text.trim()) {
+            cur.events.push({ ts, kind: 'phase', meta: { c: textPhase(text) } });
+            if (opts.onText) { cur.lastText = text; cur.research.push({ ts, kind: 'text', text }); }
+          }
           for (const c of msg.content) {
             if (c?.type !== 'tool_use') continue;
             const name = String(c.name ?? 'unknown');
             cur.toolCalls++;
             cur.pending.set(c.id, { name, ts });
             cur.events.push({ ts, kind: 'tool_start', toolName: toolLabel(name) });
+            if (name === 'Bash' && typeof c.input?.command === 'string') {
+              cur.events.push({ ts, kind: 'phase', meta: { c: commandPhase(c.input.command) } });
+              if (opts.onText) cur.research.push({ ts, kind: 'cmd', text: c.input.command });
+            }
             const todo = todoFromToolInput(name, c.input, () => `t${++cur!.taskSeq}`);
             if (todo) cur.applyTodo(todo, ts);
           }

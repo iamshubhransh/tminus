@@ -124,6 +124,32 @@ export function importTurn(db: DB, t: NormalizedTurn, prediction: Prediction | n
   });
 }
 
+/**
+ * Bring an already-imported turn up to date with a newer parser, without
+ * deleting anything (transcripts the agent has since cleaned up can't be
+ * re-read): fill model/effort if they were unknown, and add phase labels if the
+ * turn has none. Returns true if anything changed.
+ */
+export function enrichTurn(db: DB, t: NormalizedTurn): boolean {
+  const row = db.prepare(`SELECT id, model, effort, features_json FROM turns WHERE agent = ? AND session_id = ? AND ext_id = ?`)
+    .get(t.agent, t.sessionId, t.extId) as { id: number; model: string | null; effort: string | null; features_json: string | null } | undefined;
+  if (!row) return false;
+  let changed = false;
+  if ((!row.effort && t.effort) || (!row.model && t.model)) {
+    const f = parseFeatures(row.features_json);
+    if (f) { f.session.effort = f.session.effort ?? t.effort; f.session.model = f.session.model ?? t.model; }
+    db.prepare(`UPDATE turns SET effort = COALESCE(effort, ?), model = COALESCE(model, ?), features_json = COALESCE(?, features_json) WHERE id = ?`)
+      .run(t.effort, t.model, f ? JSON.stringify(f) : null, row.id);
+    changed = true;
+  }
+  const phases = t.events.filter((e) => e.kind === 'phase');
+  if (phases.length && !db.prepare(`SELECT 1 FROM events WHERE turn_id = ? AND kind = 'phase' LIMIT 1`).get(row.id)) {
+    for (const e of phases) insertEvent(db, row.id, e);
+    changed = true;
+  }
+  return changed;
+}
+
 /** Number of turns the models can learn from (same rule as isTrainable). */
 export function trainableCount(db: DB): number {
   return Number(db.prepare(`

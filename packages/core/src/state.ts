@@ -31,7 +31,7 @@ export interface LiveState {
     subagentToolCalls?: number;
     waitingSince: number | null;
     waitingReason: string | null;
-    weights: { prior: number; todo: number; activity: number };
+    weights: { prior: number; todo: number; activity: number; learned?: number };
     bucket: { level: string; n: number };
   };
   last: null | {

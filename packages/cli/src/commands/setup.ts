@@ -49,7 +49,11 @@ export async function cmdInit(a: Args): Promise<number> {
   }
 
   const self = dry ? { command: 'tminus', renderCommand: 'tminus render' } : await installSelf();
-  if (!dry) console.log(c.dim(`\nInstalled runtime copy: ${self.command}`));
+  if (!dry) {
+    console.log(c.dim(`\nInstalled runtime copy: ${self.command}`));
+    // A collector from a previous version would keep running its old code; the next hook starts the new one.
+    stopCollector();
+  }
 
   const refreshFlag = flagStr(a, 'refresh');
   const refreshInterval = refreshFlag === undefined ? undefined : refreshFlag === '0' ? null : Number(refreshFlag);

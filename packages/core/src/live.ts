@@ -77,7 +77,8 @@ export interface LiveEstimate {
   p10RemainingMs: number;
   p50RemainingMs: number;
   p90RemainingMs: number;
-  weights: { prior: number; todo: number; activity: number };
+  /** `learned` is set when the learned live model (v2) produced the estimate. */
+  weights: { prior: number; todo: number; activity: number; learned?: number };
   signals: { prior: Signal; todo: Signal | null; activity: Signal | null };
 }
 

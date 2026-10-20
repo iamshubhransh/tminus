@@ -2,22 +2,27 @@ import { readFileSync } from 'node:fs';
 import type { Config } from './config.ts';
 import { getMeta, type DB } from './db.ts';
 import type { Predictor } from './engine.ts';
-import { gbdtDistribution, isGbdtModel, type GbdtModel } from './gbdt.ts';
+import { gbdtDistribution, isGbdtModel, type GbdtModel, type PastTurn } from './gbdt.ts';
 import { logError } from './log.ts';
 import { paths } from './paths.ts';
 import { BucketPredictor, type PriorResult, type TrainingRow } from './predictor.ts';
 import { trainingRows } from './store.ts';
 import type { BucketKey, Features } from './types.ts';
 
-/** v2 supplies the submit-time distribution; v1 still supplies tool-call and per-task stats. */
+/**
+ * v2 supplies the submit-time distribution (shifted by its errors on the
+ * session's recent turns) and the learned live model; v1 still supplies
+ * tool-call and per-task stats for the fallback live blend.
+ */
 export class GbdtPredictor implements Predictor {
   readonly version = 'v2';
-  constructor(private v1: BucketPredictor, private model: GbdtModel) {}
+  constructor(private v1: BucketPredictor, readonly model: GbdtModel) {}
   get size() { return this.v1.size; }
-  prior(key: BucketKey, features?: Features): PriorResult {
+  get live() { return this.model.live; }
+  prior(key: BucketKey, features?: Features, past: PastTurn[] = []): PriorResult {
     const base = this.v1.prior(key);
     if (!features) return base;
-    return { ...base, dist: gbdtDistribution(this.model, features), level: 'v2', n: this.model.n };
+    return { ...base, dist: gbdtDistribution(this.model, features, past), level: 'v2', n: this.model.n };
   }
   add(row: TrainingRow): void { this.v1.add(row); }
 }

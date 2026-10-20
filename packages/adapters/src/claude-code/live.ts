@@ -1,5 +1,5 @@
 import { closeSync, fstatSync, openSync, readSync } from 'node:fs';
-import { normalizeEffort, promptFeatures, tsOf, type NormalizedEvent, type TodoChange, type Trigger } from '@tminus/core';
+import { commandPhase, normalizeEffort, promptFeatures, textPhase, tsOf, type NormalizedEvent, type TodoChange, type Trigger } from '@tminus/core';
 import { todoFromToolInput } from './backfill.ts';
 
 /** Notification types that mean "the agent is blocked on the human". */
@@ -68,7 +68,9 @@ export function parseClaudeHook(raw: unknown, hookEvent?: string, now = Date.now
     case 'PreToolUse': {
       let todo: TodoChange | null = null;
       if (toolName === 'TodoWrite' || toolName === 'TaskUpdate') todo = todoFromToolInput(toolName, p.tool_input);
-      return { ...base, kind: 'tool_start', ...tool, todo };
+      // Classified here, inside the hook: only the label (e.g. cmd:test) leaves it, never the command.
+      const phase = toolName === 'Bash' && typeof p.tool_input?.command === 'string' ? commandPhase(p.tool_input.command) : null;
+      return { ...base, kind: 'tool_start', ...tool, todo, phase };
     }
     case 'PostToolUse':
     case 'PostToolUseFailure': {
@@ -112,33 +114,49 @@ export function parseClaudeHook(raw: unknown, hookEvent?: string, now = Date.now
   }
 }
 
+export interface ProbeResult {
+  offset: number;
+  interruptedAt: number | null;
+  /** Phase labels for assistant messages written since the last probe (labels only). */
+  phases: { ts: number; labels: string[] }[];
+}
+
 /**
- * Pressing Esc in Claude Code fires no hook. The transcript gets an
- * "[Request interrupted by user]" record, so the collector tails new bytes.
+ * The collector tails the transcript while a turn runs. Pressing Esc fires no
+ * hook, but the transcript gets an "[Request interrupted by user]" record; and
+ * the agent's messages, which no hook reports, give phase labels.
  */
-export function probeTranscript(path: string, fromOffset: number): { offset: number; interruptedAt: number | null } {
+export function probeTranscript(path: string, fromOffset: number): ProbeResult {
   let fd: number;
-  try { fd = openSync(path, 'r'); } catch { return { offset: fromOffset, interruptedAt: null }; }
+  try { fd = openSync(path, 'r'); } catch { return { offset: fromOffset, interruptedAt: null, phases: [] }; }
   try {
     const size = fstatSync(fd).size;
     if (fromOffset > size) fromOffset = 0; // rewritten
-    if (size === fromOffset) return { offset: size, interruptedAt: null };
+    if (size === fromOffset) return { offset: size, interruptedAt: null, phases: [] };
     const len = Math.min(size - fromOffset, 4 * 1024 * 1024);
     const start = size - len;
     const buf = Buffer.alloc(len);
     readSync(fd, buf, 0, len, start);
     const text = buf.toString('utf8');
     const lastNl = text.lastIndexOf('\n');
-    if (lastNl < 0) return { offset: fromOffset, interruptedAt: null };
+    if (lastNl < 0) return { offset: fromOffset, interruptedAt: null, phases: [] };
     let interruptedAt: number | null = null;
+    const phases: ProbeResult['phases'] = [];
     for (const line of text.slice(0, lastNl).split('\n')) {
-      if (!line.includes('[Request interrupted by user')) continue;
+      const interrupt = line.includes('[Request interrupted by user');
+      const assistant = line.includes('"assistant"');
+      if (!interrupt && !assistant) continue;
       try {
         const rec = JSON.parse(line);
-        if (rec.type === 'user' && !rec.isSidechain) interruptedAt = tsOf(rec.timestamp) ?? Date.now();
+        if (rec.isSidechain) continue;
+        if (interrupt && rec.type === 'user') interruptedAt = tsOf(rec.timestamp) ?? Date.now();
+        if (rec.type === 'assistant' && Array.isArray(rec.message?.content)) {
+          const said = rec.message.content.filter((c: any) => c?.type === 'text' && typeof c.text === 'string').map((c: any) => c.text).join('\n');
+          if (said.trim()) phases.push({ ts: tsOf(rec.timestamp) ?? Date.now(), labels: textPhase(said) });
+        }
       } catch { /* partial */ }
     }
-    return { offset: start + Buffer.byteLength(text.slice(0, lastNl + 1)), interruptedAt };
+    return { offset: start + Buffer.byteLength(text.slice(0, lastNl + 1)), interruptedAt, phases };
   } finally {
     closeSync(fd);
   }

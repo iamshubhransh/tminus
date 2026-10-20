@@ -12,7 +12,8 @@
     "bench": "bun test tests/render.bench.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "tminus": "bun packages/cli/src/index.ts",
-    "menubar": "cd apps/menubar && swift build -c release"
+    "menubar": "cd apps/menubar && swift build -c release",
+    "lab": "bun lab/run.ts"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",

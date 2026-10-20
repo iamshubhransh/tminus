@@ -88,6 +88,21 @@ describe('Claude Code backfill', () => {
     expect(ts[0].outcome).toBe('completed');
   });
 
+  test('effort from assistant records; phase labels from what the agent says and runs; `!` shell commands are not turns', async () => {
+    const ts = await turns('synthetic-phases.jsonl');
+    expect(ts.length).toBe(1);
+    const t = ts[0];
+    expect(t.effort).toBe('medium');
+    expect(t.features.session.effort).toBe('medium');
+    const phases = t.events.filter((e) => e.kind === 'phase').map((e) => (e.meta as any).c as string[]);
+    expect(phases).toEqual([['text', 'text:early'], ['cmd:test', 'cmd:run'], ['cmd:commit'], ['text', 'text:late']]);
+    // Labels only: neither the agent's words nor the commands are kept.
+    const json = JSON.stringify(t);
+    expect(json).not.toContain('secret-file');
+    expect(json).not.toContain('flaky clock');
+    expect(json).not.toContain('test setup');
+  });
+
   test('no prompt text survives into features', async () => {
     const ts = await turns('synthetic-interrupt.jsonl');
     expect(JSON.stringify(ts)).not.toContain('auth module');
@@ -126,6 +141,13 @@ describe('Claude Code hooks', () => {
     expect(parseClaudeHook(null)).toBeNull();
   });
 
+  test('Bash commands are classified inside the hook; the command itself goes no further', () => {
+    const ev = parseClaudeHook({ ...common, hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'npm test -- --grep "customer 4411"' } })!;
+    expect(ev.phase).toEqual(['cmd:test']);
+    expect(JSON.stringify(ev)).not.toContain('4411');
+    expect(parseClaudeHook({ ...common, hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: '/x' } })!.phase).toBeNull();
+  });
+
   test('todo tools carry only ids and statuses', () => {
     const ev = parseClaudeHook({ ...common, hook_event_name: 'PreToolUse', tool_name: 'TodoWrite', tool_input: { todos: [{ content: 'secret plan', status: 'completed' }, { content: 'x', status: 'in_progress' }] } })!;
     expect(ev.todo).toEqual({ kind: 'snapshot', items: [{ id: '0', status: 'completed' }, { id: '1', status: 'in_progress' }] });
@@ -146,5 +168,16 @@ describe('Claude Code hooks', () => {
     r = probeTranscript(file, r.offset);
     expect(r.interruptedAt).toBe(Date.parse('2026-10-20T10:01:00Z'));
     expect(probeTranscript(join(dir, 'missing.jsonl'), 0).interruptedAt).toBeNull();
+  });
+
+  test('the probe reports phase labels for new assistant messages (not subagents)', () => {
+    const dir = join(process.env.TMINUS_TEST_ROOT!, 'probe2');
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, 't.jsonl');
+    writeFileSync(file, '');
+    appendFileSync(file, JSON.stringify({ type: 'assistant', timestamp: '2026-10-20T10:00:05Z', message: { content: [{ type: 'text', text: 'Now let me implement the parser.' }] } }) + '\n');
+    appendFileSync(file, JSON.stringify({ type: 'assistant', isSidechain: true, timestamp: '2026-10-20T10:00:06Z', message: { content: [{ type: 'text', text: 'Let me start exploring.' }] } }) + '\n');
+    const r = probeTranscript(file, 0);
+    expect(r.phases).toEqual([{ ts: Date.parse('2026-10-20T10:00:05Z'), labels: ['text', 'text:middle'] }]);
   });
 });

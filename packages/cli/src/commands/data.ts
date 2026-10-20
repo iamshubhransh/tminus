@@ -27,9 +27,14 @@ export async function runBackfill(a: Args, adapters?: AgentAdapter[], brief = fa
       console.log(c.dim(`Rebuilding: removed ${removed} backfilled turns; live turns kept.`));
     }
     const s = importTurns(db, turns);
+    if (flagBool(a, 'quiet')) {
+      // Background run (the collector upgrading an older database): retrain on the enriched data.
+      try { promoteV2IfBetter(db); } catch { /* evaluation is optional */ }
+      return 0;
+    }
     const total = db.prepare(`SELECT COUNT(*) n FROM turns`).get().n;
     const agents = Object.entries(s.byAgent).map(([k, v]) => `${k} ${v}`).join(', ') || 'none new';
-    console.log(`Read ${files} transcript files in ${((Date.now() - t0) / 1000).toFixed(1)}s: ${s.seen} turns, ${s.imported} new (${agents}), ${s.skipped} already imported.`);
+    console.log(`Read ${files} transcript files in ${((Date.now() - t0) / 1000).toFixed(1)}s: ${s.seen} turns, ${s.imported} new (${agents}), ${s.skipped} already imported${s.enriched ? `, ${s.enriched} brought up to date` : ''}.`);
     if (s.imported) {
       const o = s.byOutcome;
       console.log(c.dim(`  outcomes: ${o.completed ?? 0} completed, ${o.interrupted ?? 0} interrupted, ${o.errored ?? 0} errored. ${total} turns in the database.`));
@@ -228,14 +233,14 @@ export async function cmdEval(a: Args): Promise<number> {
     if (!r.v2) { console.log(r.reasons[0]); return 0; }
     console.log(c.bold('tminus eval') + c.dim(` · rolling origin: ${r.folds.length} consecutive time folds, each trained only on earlier turns (${r.testN} test turns from ${new Date(r.splitAt).toISOString().slice(0, 10)})`));
     const row = (name: string, m: Metrics) => [name, String(m.n), fmtFactor(m.mdae), fmtPct(m.underP90), fmtPct(m.inRange), m.pinball50.toFixed(3), m.pinball90.toFixed(3)];
-    console.log(table([['pooled', 'test', 'typical miss', 'under P90', 'in range', 'pinball@.5', 'pinball@.9'], row('v1 buckets', r.v1), row('v2 gbdt', r.v2)], ['l', 'r', 'r', 'r', 'r', 'r', 'r']));
+    console.log(table([['pooled', 'test', 'typical miss', 'under P90', 'in range', 'pinball@.5', 'pinball@.9'], row('v1 buckets', r.v1), row('v2 learned', r.v2)], ['l', 'r', 'r', 'r', 'r', 'r', 'r']));
     const fr: string[][] = [['fold', 'train', 'test', 'from', 'v1 miss', 'v2 miss', 'v1 <P90', 'v2 <P90']];
     r.folds.forEach((f, i) => fr.push([String(i + 1), String(f.trainN), String(f.testN), new Date(f.from).toISOString().slice(0, 10),
       fmtFactor(f.v1.mdae), fmtFactor(f.v2.mdae), fmtPct(f.v1.underP90), fmtPct(f.v2.underP90)]));
     console.log('\n' + table(fr, ['r', 'r', 'r', 'l', 'r', 'r', 'r', 'r']));
     if (r.live) {
       const lr = (name: string, l: typeof r.live.v1) => [name, ...l.mdae.map(fmtFactor), fmtPct(l.runningP50), fmtPct(l.runningP90)];
-      console.log('\n' + table([['live (replayed)', 'at 25%', 'at 50%', 'at 75%', 'P50 cal', 'P90 cal'], lr('v1 prior', r.live.v1), lr('v2 prior', r.live.v2)], ['l', 'r', 'r', 'r', 'r', 'r']));
+      console.log('\n' + table([['live (replayed)', 'at 25%', 'at 50%', 'at 75%', 'P50 cal', 'P90 cal'], lr('v1 blend', r.live.v1), lr('v2 live model', r.live.v2)], ['l', 'r', 'r', 'r', 'r', 'r']));
     }
     console.log('');
     for (const line of r.reasons) console.log(line.startsWith('pass') ? c.green(`  ✓ ${line.slice(6)}`) : c.yellow(`  ✗ ${line.slice(6)}`));

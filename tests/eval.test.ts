@@ -3,8 +3,9 @@ import { describe, expect, test } from 'bun:test';
 // Model training is CPU-bound; shared CI runners are several times slower than a laptop.
 const SLOW = 60_000;
 import {
-  buildFeatures, evaluate, importTurns, isGbdtModel, liveQuality, metrics, openDb, predictGbdt, scoredTurns, trainGbdt,
-  type NormalizedTurn,
+  buildFeatures, evaluate, importTurns, isGbdtModel, liveEstimate, liveQuality, locate, metrics, openDb, predictGbdt, priorQ,
+  gbdtDistribution, replayObs, scoredTurns, sessionShift, trainGbdt, turnInfo,
+  type NormalizedTurn, type TrainTurn, type TurnEvent,
 } from '@tminus/core';
 
 /** Deterministic pseudo-random lognormal-ish durations per intent. */
@@ -25,7 +26,15 @@ function synthTurns(n: number): NormalizedTurn[] {
       agent: 'claude-code', sessionId: `s${i % 7}`, extId: `e${i}`, projectHash: null, sessionStartedAt: at, submittedAt: at,
       finishedAt: at + ms, idleMs: 0, outcome: 'completed', model: 'm1', effort: 'high', mode: 'default', contextPct: null,
       features, toolCalls: Math.round(ms / 15_000), subagentToolCalls: 0, todoTotal: 0, agentDurationMs: ms,
-      events: [{ ts: at, kind: 'prompt_submit' }, ...Array.from({ length: Math.round(ms / 15_000) }, (_, k) => ({ ts: at + k * 15_000, kind: 'tool_start' as const, toolName: 'Read' })), { ts: at + ms, kind: 'stop' }],
+      events: [
+        { ts: at, kind: 'prompt_submit' },
+        { ts: at + 1000, kind: 'phase', meta: { c: ['text', 'text:early'] } },
+        ...Array.from({ length: Math.round(ms / 15_000) }, (_, k) => ({ ts: at + k * 15_000, kind: 'tool_start' as const, toolName: 'Read' })),
+        // Tests then a commit near the end: the live model can learn how far along the turn is.
+        { ts: at + Math.round(ms * 0.6), kind: 'phase', meta: { c: ['cmd:test'] } },
+        { ts: at + Math.round(ms * 0.85), kind: 'phase', meta: { c: ['cmd:commit'] } },
+        { ts: at + ms, kind: 'stop' },
+      ].sort((a, b) => a.ts - b.ts) as TurnEvent[],
     });
   }
   return out;
@@ -85,9 +94,13 @@ describe('backfill import + evaluation', () => {
   });
 });
 
-describe('v2: median GBDT + out-of-fold residuals', () => {
+const asTrain = (t: NormalizedTurn, i: number): TrainTurn => ({
+  id: i, features: t.features, activeMs: t.finishedAt - t.submittedAt, agent: t.agent, submittedAt: t.submittedAt, events: t.events,
+});
+
+describe('v2: bagged median GBDT + out-of-fold residuals + live model', () => {
   const data = synthTurns(300);
-  const m = trainGbdt(data.map((t) => t.features), data.map((t) => t.finishedAt - t.submittedAt), { rounds: 40 });
+  const m = trainGbdt(data.map(asTrain), { rounds: 40 });
 
   test('separates intents; quantiles are ordered; the model round-trips through JSON', () => {
     const fix = predictGbdt(m, buildFeatures('fix the bug', 0, 'human', { model: 'm1', effort: 'high' }));
@@ -110,5 +123,29 @@ describe('v2: median GBDT + out-of-fold residuals', () => {
 
   test('old model files are rejected', () => {
     expect(isGbdtModel({ version: 'v2', quantiles: [] })).toBe(false);
+    expect(isGbdtModel({ ...m, format: 2 })).toBe(false);
+  });
+
+  test('session correction uses honest (out-of-fold) errors for turns the model was trained on', () => {
+    expect(Object.keys(m.oof).length).toBe(300);
+    const past = [{ id: 0, features: data[0].features, activeMs: data[0].finishedAt - data[0].submittedAt }];
+    const honest = Math.log(past[0].activeMs) - m.oof['0'];
+    expect(sessionShift(m, past)).toBeCloseTo(honest / (1 + m.session.kappa), 6);
+    // A session that keeps running 3x longer than predicted moves the next prediction up.
+    const f = data[1].features;
+    const slow = [1, 2, 3].map(() => ({ features: f, activeMs: Math.exp(locate(m, f)) * 3 }));
+    expect(predictGbdt(m, f, slow).p50).toBeGreaterThan(predictGbdt(m, f).p50 * 1.5);
+  });
+
+  test('the live model trains on phase-labelled events; its quantiles are ordered and it sees late phases', () => {
+    expect(m.live).not.toBeNull();
+    const t = data.find((x) => x.features.prompt.intent === 'build_feature')!;
+    const T = t.finishedAt - t.submittedAt;
+    const d = gbdtDistribution(m, t.features);
+    const [early, late] = replayObs(t.events as any, t.submittedAt, [T * 0.3, T * 0.9]).map((o) => liveEstimate(m.live!, turnInfo(t.agent, t.features), d, priorQ(d), o).blended);
+    for (const e of [early, late]) { expect(e.p10).toBeLessThan(e.p50); expect(e.p50).toBeLessThan(e.p90); }
+    expect(late.p50).toBeLessThan(early.p50);
+    const noPhases = trainGbdt(data.map((x, i) => ({ ...asTrain(x, i), events: x.events.filter((e) => e.kind !== 'phase') })), { rounds: 10 });
+    expect(noPhases.live).toBeNull();
   });
 });

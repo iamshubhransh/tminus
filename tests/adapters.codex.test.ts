@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { CodexTailer, codex as codexAdapter, parseCodexHook, parseCodexRollout } from '@tminus/adapters';
+import { CodexTailer, codex as codexAdapter, codexRecordToEvents, newCodexState, parseCodexHook, parseCodexRollout } from '@tminus/adapters';
 import type { NormalizedEvent, NormalizedTurn } from '@tminus/core';
 
 const FX = join(import.meta.dir, 'fixtures', 'codex');
@@ -68,6 +68,24 @@ describe('Codex live tailer', () => {
     expect(got.map((e) => e.kind)).toEqual(['prompt_submit', 'tool_start', 'tool_end', 'waiting_user', 'stop']);
     expect(got[1].todo).toEqual({ kind: 'snapshot', items: [{ id: '0', status: 'completed' }, { id: '1', status: 'in_progress' }] });
     expect(readFileSync(file, 'utf8')).toContain('partial');
+  });
+});
+
+describe('Codex phase labels', () => {
+  test('agent messages and shell commands become phase labels; their text is not kept', () => {
+    const st = newCodexState();
+    const rec = (type: string, payload: unknown) => ({ timestamp: '2026-10-20T10:00:00Z', type, payload });
+    codexRecordToEvents(st, rec('session_meta', { id: 'th1', cwd: '/w', source: 'cli' }));
+    codexRecordToEvents(st, rec('event_msg', { type: 'task_started', turn_id: 'turn1' }));
+    codexRecordToEvents(st, rec('event_msg', { type: 'user_message', message: 'fix it' }));
+    const said = codexRecordToEvents(st, rec('event_msg', { type: 'agent_message', message: 'Let me start by reading the config for acme-corp.' }));
+    expect(said).toMatchObject([{ kind: 'phase', phase: ['text', 'text:early'] }]);
+    const newer = codexRecordToEvents(st, rec('event_msg', { type: 'item_completed', item: { type: 'AgentMessage', text: 'Now let me implement it.' } }));
+    expect(newer).toMatchObject([{ kind: 'phase', phase: ['text', 'text:middle'] }]);
+    const run = codexRecordToEvents(st, rec('response_item', { type: 'function_call', name: 'exec_command', call_id: 'c1', arguments: JSON.stringify({ cmd: 'git push origin main', workdir: '/w' }) }));
+    expect(run.map((e) => e.kind)).toEqual(['tool_start', 'phase']);
+    expect(run[1].phase).toEqual(['cmd:push']);
+    expect(JSON.stringify([said, newer, run])).not.toContain('acme-corp');
   });
 });
 

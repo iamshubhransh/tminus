@@ -3,7 +3,7 @@ import { mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, watch } f
 import { join } from 'node:path';
 import { CodexTailer, probeTranscript } from '@tminus/adapters';
 import {
-  acquireCollectorLock, Engine, getMeta, loadConfig, loadPredictor, logError, logLine, openDb, paths, releaseCollectorLock,
+  acquireCollectorLock, DATA_VERSION, Engine, getMeta, loadConfig, loadPredictor, logError, logLine, openDb, paths, predictorStatus, releaseCollectorLock,
   selfCommand, setMeta, trainableCount,
   type NormalizedEvent,
 } from '@tminus/core';
@@ -45,6 +45,20 @@ export async function runCollector(opts: { foreground?: boolean } = {}): Promise
   });
   const restored = engine.restore();
   logLine('collector', `started pid=${process.pid} predictor=${engine.predictor.version} n=${engine.predictor.size} restored=${restored} driver=${db.driver}`);
+
+  // A database imported by an older version lacks what the current model learns from
+  // (phase labels, effort on older turns): enrich it once in the background; that run retrains.
+  if (Number(getMeta(db, 'data_version') ?? 0) < DATA_VERSION && getMeta(db, 'data_upgrade') !== String(DATA_VERSION)) {
+    setMeta(db, 'data_upgrade', String(DATA_VERSION));
+    try {
+      const [runtime, script] = selfCommand();
+      spawn(runtime, [script, 'backfill', '--quiet'], { detached: true, stdio: 'ignore', env: process.env }).unref();
+      logLine('collector', `upgrading imported history to data version ${DATA_VERSION}`);
+    } catch (e) { logError('collector', 'data upgrade failed to start', e); }
+  } else if (cfg.predictor === 'v2' && getMeta(db, 'v2_eligible') === '1' && predictorStatus(db, cfg).active === 'v1') {
+    // A model file from an older version is ignored (v1 is used meanwhile): retrain at the next quiet moment.
+    setMeta(db, 'v2_evaluated_n', '0');
+  }
 
   let lastActivity = Date.now();
   let lastEvalCheck = 0;

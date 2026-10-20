@@ -18,5 +18,5 @@
       "@tminus/render": ["./packages/render/src/index.ts"]
     }
   },
-  "include": ["packages/*/src/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts"]
+  "include": ["packages/*/src/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts", "lab/*.ts"]
 }

@@ -25,7 +25,7 @@ describe('config', () => {
 describe('predictor selection', () => {
   const tinyModel = () => {
     const feats = Array.from({ length: 80 }, (_, i) => buildFeatures(i % 2 ? 'fix the bug' : 'build a page', i, 'human', { model: 'm1' }));
-    return trainGbdt(feats, feats.map((_, i) => 30_000 + (i % 7) * 10_000), { rounds: 10 });
+    return trainGbdt(feats.map((features, i) => ({ features, activeMs: 30_000 + (i % 7) * 10_000, agent: 'claude-code', submittedAt: i })), { rounds: 10, live: false });
   };
 
   test('default v2 falls back to v1 until v2 has won an evaluation', () => {

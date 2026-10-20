@@ -1,5 +1,5 @@
 import {
-  hashPath, normalizeEffort, normalizeModel, promptFeatures, tsOf,
+  codexCommand, commandPhase, hashPath, normalizeEffort, normalizeModel, promptFeatures, textPhase, tsOf,
   type NormalizedEvent, type TodoChange, type Trigger,
 } from '@tminus/core';
 import { normStatus } from '../claude-code/backfill.ts';
@@ -18,6 +18,7 @@ import { normStatus } from '../claude-code/backfill.ts';
  *   event_msg task_complete      payload.duration_ms (newer)                   -> turn completed
  *   event_msg turn_aborted       payload.reason                                -> interrupted
  *   event_msg token_count        info.last_token_usage, model_context_window   -> context %
+ *   event_msg agent_message | item_completed AgentMessage                      -> phase labels (text not kept)
  */
 
 export const QUESTION_TOOL = /^request_user_input/;
@@ -61,6 +62,18 @@ export function userMessageText(payload: any): { text: string; images: number } 
       else if (/image/.test(String(c?.type))) images++;
     }
     return { text, images };
+  }
+  return null;
+}
+
+/** The agent's message text: event_msg agent_message (older) or item_completed AgentMessage (newer). */
+export function agentMessageText(payload: any): string | null {
+  if (payload?.type === 'agent_message' && typeof payload.message === 'string') return payload.message.trim() ? payload.message : null;
+  if (payload?.type === 'item_completed' && payload.item?.type === 'AgentMessage') {
+    const it = payload.item;
+    const text = typeof it.text === 'string' ? it.text
+      : Array.isArray(it.content) ? it.content.map((c: any) => (typeof c?.text === 'string' ? c.text : '')).join('\n') : '';
+    return text.trim() ? text : null;
   }
   return null;
 }
@@ -136,6 +149,12 @@ function recordToEvents(st: CodexParserState, rec: any): NormalizedEvent[] {
     case 'event_msg': {
       const um = userMessageText(p);
       if (um) { flushStart(um.text, um.images); return out; }
+      const said = agentMessageText(p);
+      if (said) {
+        flushStart();
+        out.push({ ...base(), kind: 'phase', phase: textPhase(said) });
+        return out;
+      }
       switch (p.type) {
         case 'task_started': {
           flushStart();
@@ -181,6 +200,8 @@ function recordToEvents(st: CodexParserState, rec: any): NormalizedEvent[] {
         if (p.call_id) st.calls.set(p.call_id, name);
         const todo = name === 'update_plan' ? todoFromPlan(p.arguments ?? p.input) : null;
         out.push({ ...base(), kind: 'tool_start', toolName: name.startsWith('mcp__') ? 'mcp' : name, toolUseId: p.call_id ?? null, todo });
+        const cmd = codexCommand(name, p.arguments ?? p.input ?? p.action);
+        if (cmd) out.push({ ...base(), kind: 'phase', phase: commandPhase(cmd) });
         if (p.type === 'web_search_call') out.push({ ...base(), kind: 'tool_end', toolName: name });
       } else if (/_call_output$/.test(String(p.type))) {
         const name = st.calls.get(p.call_id) ?? null;
